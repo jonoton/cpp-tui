@@ -2,6 +2,8 @@
 
 A lightweight, single-header C++ TUI (Text User Interface) library.
 
+<img alt="widget_demo" src="https://drive.google.com/uc?id=1NM2GmkXnicG2QvCZTlvF4OLFBKGiHMv4" height="200px" style="margin:1px;" /> <img alt="spectrum_sim" src="https://drive.google.com/uc?id=1lulziaocb7SiDdzGJ11ZvxNgNskBsy7j" height="200px" style="margin:1px;" />
+
 ## Features
 
 - **Single Header**: Easy integration with just `#include "cpptui.hpp"`.
