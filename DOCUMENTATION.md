@@ -69,6 +69,17 @@ Events are handled by the `App` and propagated to widgets.
 - **Key Events**: Pressing keys like `Enter`, `Esc`, `Tab`, or arrow keys.
 - **Mouse Events**: Clicks, drags, and scrolling.
 - **Focus**: `Tab` / `Shift+Tab` cycles focus between interactive widgets.
+- **Resize**: `g_resize_pending` signal handling for terminal resize events.
+
+### Clipboard & History
+
+Global default keybindings are available for text editing widgets (`Input`, `TextArea`, and selectable `Label`).
+- **Copy**: `Ctrl+C` or `Ctrl+Shift+C`
+- **Cut**: `Ctrl+X` or `Ctrl+Shift+X` (Editable widgets only)
+- **Paste**: `Ctrl+V` or `Ctrl+Shift+V` (Editable widgets only)
+- **Undo**: `Ctrl+Z` (Editable widgets only)
+- **Redo**: `Ctrl+Shift+Z` or `Ctrl+Y` (Editable widgets only)
+- **Select All**: `Ctrl+A`
 
 ## API Reference
 
@@ -112,12 +123,13 @@ A vertical layout that scrolls if its content exceeds its height.
 
 #### `ScrollableHorizontal`
 A horizontal layout that scrolls if its content exceeds its width.
-- Supports horizontal scrollbar and keyboard navigation.
+- Supports horizontal scrollbar.
 
 #### `ScrollableContainer`
 Bi-directional scrollable container for panning over large 2D content.
 - `scroll_x`, `scroll_y`: Current scroll offsets.
 - Supports both horizontal and vertical scrollbars.
+- **Keyboard**: Arrow keys, PageUp/PageDown (Vertical). Ctrl+Arrow (Horizontal).
 
 ### Containers
 
@@ -162,6 +174,7 @@ Displays simple static text, useful for minimal text rendering.
 
 #### `Label`
 Displays read-only text with color support.
+- `selectable`: If `true`, text can be selected with the mouse and copied (`Ctrl+C`).
 
 #### `Paragraph`
 Multi-line text widget with word wrapping and indentation.
@@ -249,6 +262,7 @@ Text input field. Focusable.
 - `regex_pattern`: Validation regex (e.g. `^\\d+$`).
 - `empty_char`: Character filler (defaults to space).
 - **Scrolling**: Auto-scrolls horizontally when text exceeds width.
+- **Clipboard & History**: Supports Copy, Cut, Paste and Undo/Redo.
 
 #### `TextArea`
 Multi-line text editor with full scrolling and cursor support.
@@ -258,8 +272,9 @@ Multi-line text editor with full scrolling and cursor support.
 - `show_scrollbar`: Toggle scrollbars.
 - **Interactions**:
     - Click to move cursor.
-    - Mouse wheel to scroll (Shift+Wheel for horizontal).
+    - Mouse wheel to scroll (Ctrl+Wheel for horizontal).
     - Scrollbar dragging supported.
+- **Clipboard & History**: Supports Copy, Cut, Paste and Unlimited Undo/Redo history.
 
 #### `SearchInput`
 Input with autocomplete dropdown.

@@ -108,5 +108,8 @@ int main() {
 ## Controls
 - **Global**: `Ctrl+C` to force quit (or specific keys like `q` in demos). Use `App::quit()` for graceful exit.
 - **Navigation**: Tab / Shift+Tab to switch focus, Arrow Keys for selection.
-- **Scrolling**: Mouse wheel, PageUp/PageDown (Vertical), Shift+PageUp/Shift+PageDown (Horizontal).
+- **Scrolling**: Mouse wheel (Vertical), Ctrl+Wheel (Horizontal). Keys: PageUp/PageDown (Vertical).
 - **Mouse**: Click to focus/activate, Scroll wheel for lists/text.
+- **Clipboard & History**:
+    - **Copy/Cut/Paste**: Standard shortcuts (`Ctrl+C/X/V`) supported on `Input`, `TextArea`, and `Label`.
+    - **Undo/Redo**: `Ctrl+Z` / `Ctrl+Y` supported on editable text widgets.

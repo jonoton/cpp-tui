@@ -30,17 +30,10 @@
 #include <algorithm>
 #include <filesystem>
 #include <atomic>
+#include <optional>
 
 namespace cpptui
 {
-    // Global signal flag for Ctrl+C handling
-    static std::atomic<bool> g_sigint_received{false};
-    inline void signal_handler(int signal)
-    {
-        if (signal == SIGINT)
-            g_sigint_received = true;
-    }
-
     class App;
     class Dialog;
 
@@ -90,7 +83,7 @@ namespace cpptui
     };
 
     constexpr int VERSION_MAJOR = 1;
-    constexpr int VERSION_MINOR = 1;
+    constexpr int VERSION_MINOR = 2;
     constexpr int VERSION_PATCH = 0;
 
     inline std::string version()
@@ -762,6 +755,52 @@ namespace cpptui
         bool shift = false; ///< True if Shift modifier is active
         bool ctrl = false;  ///< True if Ctrl modifier is active
         bool alt = false;   ///< True if Alt modifier is active
+
+        /// @brief Check if the event is a copy command
+        bool is_copy() const
+        {
+            return (ctrl && shift && (key == 'c' || key == 'C')) ||
+                   (ctrl && (key == 'c' || key == 'C' || key == 3));
+        }
+
+        bool is_cut() const
+        {
+            return (ctrl && shift && (key == 'x' || key == 'X')) ||
+                   (ctrl && (key == 'x' || key == 'X' || key == 24));
+        }
+
+        bool is_paste() const
+        {
+            return (ctrl && shift && (key == 'v' || key == 'V')) ||
+                   (ctrl && (key == 'v' || key == 'V' || key == 22));
+        }
+
+        bool is_select_all() const { return ctrl && (key == 'a' || key == 1); }
+
+        bool is_undo() const
+        {
+            return (ctrl && !shift && (key == 'z' || key == 'Z' || key == 26));
+        }
+
+        bool is_redo() const
+        {
+            return (ctrl && shift && (key == 'z' || key == 'Z')) ||
+                   (ctrl && !shift && (key == 'y' || key == 'Y' || key == 25));
+        }
+
+        bool is_enter() const { return key == 10 || key == 13; }
+        bool is_tab() const { return key == 9; }
+        bool is_backspace() const { return key == 8 || key == 127; }
+        bool is_delete() const { return key == 1005; }
+
+        bool is_nav_up() const { return key == 1065; }
+        bool is_nav_down() const { return key == 1066; }
+        bool is_nav_left() const { return key == 1068; }
+        bool is_nav_right() const { return key == 1067; }
+        bool is_nav_home() const { return key == 1003; }
+        bool is_nav_end() const { return key == 1004; }
+        bool is_nav_pgup() const { return key == 1001; }
+        bool is_nav_pgdn() const { return key == 1002; }
     };
 
     /// @brief Represents an RGB color
@@ -2055,7 +2094,7 @@ namespace cpptui
             struct termios raw;
             tcgetattr(STDIN_FILENO, &raw);
             originalTermios = raw;
-            raw.c_lflag &= ~(ECHO | ICANON | IEXTEN); // Keep ISIG enabled for SIGINT
+            raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG); // Disable ISIG to allow Ctrl+Z as raw input
             raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
 #ifdef IUTF8
             raw.c_iflag |= IUTF8;
@@ -2694,26 +2733,10 @@ namespace cpptui
                     ret = select(STDIN_FILENO + 1, &fds, NULL, NULL, NULL);
                 }
 
-                if (g_sigint_received.exchange(false))
-                {
-                    event.type = EventType::Key;
-                    event.key = 3; // Ctrl+C
-                    event.ctrl = true;
-                    return event;
-                }
-
                 if (ret == 0)
                     return event;
                 if (ret < 0)
                 {
-                    if (g_sigint_received.exchange(false))
-                    {
-                        event.type = EventType::Key;
-                        event.key = 3;
-                        event.ctrl = true;
-                        return event;
-                    }
-
                     if (errno == EINTR && g_resize_pending)
                     {
                         g_resize_pending = 0;
@@ -2730,25 +2753,10 @@ namespace cpptui
             // Loop to consume buffer until event found or empty
             while (true)
             {
-                if (g_sigint_received.exchange(false))
-                {
-                    event.type = EventType::Key;
-                    event.key = 3;
-                    event.ctrl = true;
-                    return event;
-                }
-
                 char c;
                 int nread = read(STDIN_FILENO, &c, 1);
                 if (nread < 0 && errno == EINTR)
                 {
-                    if (g_sigint_received.exchange(false))
-                    {
-                        event.type = EventType::Key;
-                        event.key = 3;
-                        event.ctrl = true;
-                        return event;
-                    }
                     if (g_resize_pending)
                     { /*...*/
                     }
@@ -3116,7 +3124,7 @@ namespace cpptui
 
             if (has_focus() && event.type == EventType::Key)
             {
-                if (event.ctrl && (event.key == 'a' || event.key == 1))
+                if (event.is_select_all())
                 {
                     auto chars = prepare_text_for_render(text_);
                     sel_start_ = 0;
@@ -3124,8 +3132,7 @@ namespace cpptui
                     return true;
                 }
 
-                if ((event.ctrl && event.shift && (event.key == 'c' || event.key == 'C')) ||
-                    (event.ctrl && (event.key == 'c' || event.key == 'C' || event.key == 3)))
+                if (event.is_copy())
                 {
                     if (has_selection())
                     {
@@ -3344,8 +3351,7 @@ namespace cpptui
                 }
 
                 // Handle Copy (Ctrl+Shift+C OR Ctrl+C)
-                if ((event.ctrl && event.shift && (event.key == 'c' || event.key == 'C')) ||
-                    (event.ctrl && (event.key == 'c' || event.key == 'C' || event.key == 3)))
+                if (event.is_copy())
                 {
                     if (has_selection())
                     {
@@ -3936,8 +3942,7 @@ namespace cpptui
                     return true;
                 }
 
-                if ((event.ctrl && event.shift && (event.key == 'c' || event.key == 'C')) ||
-                    (event.ctrl && (event.key == 'c' || event.key == 'C' || event.key == 3)))
+                if (event.is_copy())
                 {
                     if (has_selection())
                     {
@@ -4358,7 +4363,7 @@ namespace cpptui
 
             if (has_focus() && event.type == EventType::Key)
             {
-                if (event.ctrl && (event.key == 'a' || event.key == 1))
+                if (event.is_select_all())
                 {
                     std::string plain = get_full_text();
                     sel_start_ = 0;
@@ -4366,8 +4371,7 @@ namespace cpptui
                     return true;
                 }
 
-                if ((event.ctrl && event.shift && (event.key == 'c' || event.key == 'C')) ||
-                    (event.ctrl && (event.key == 'c' || event.key == 'C' || event.key == 3)))
+                if (event.is_copy())
                 {
                     if (has_selection())
                     {
@@ -5136,8 +5140,104 @@ namespace cpptui
         bool pressed_ = false; // Currently visually pressed;
     };
 
+    /// @brief Generic undo/redo history manager for text input widgets
+    /// @tparam State The state type to track (e.g., InputState, TextAreaState)
+    template <typename State>
+    class UndoRedoHistory
+    {
+    public:
+        static constexpr size_t MAX_HISTORY = 100;
+
+        /// @brief Push a new state to the history
+        /// @param state The state to save
+        void push(const State &state)
+        {
+            // If we're not at the end of history, truncate redo states
+            if (current_idx_ < history_.size())
+            {
+                history_.erase(history_.begin() + current_idx_, history_.end());
+            }
+
+            // Add new state
+            history_.push_back(state);
+
+            // Enforce max history size
+            if (history_.size() > MAX_HISTORY)
+            {
+                history_.erase(history_.begin());
+            }
+            else
+            {
+                current_idx_++;
+            }
+        }
+
+        /// @brief Check if undo is possible
+        bool can_undo() const
+        {
+            return current_idx_ > 0;
+        }
+
+        /// @brief Check if redo is possible
+        bool can_redo() const
+        {
+            return current_idx_ < history_.size();
+        }
+
+        /// @brief Undo to previous state
+        /// @param current The current state (saved before returning previous)
+        /// @return The previous state, or nullopt if no history
+        std::optional<State> undo(const State &current)
+        {
+            if (!can_undo())
+                return std::nullopt;
+
+            // If at the end of history, save current state for redo
+            if (current_idx_ == history_.size())
+            {
+                history_.push_back(current);
+            }
+
+            current_idx_--;
+            return history_[current_idx_];
+        }
+
+        /// @brief Redo to next state
+        /// @return The next state, or nullopt if no redo available
+        std::optional<State> redo()
+        {
+            if (!can_redo())
+                return std::nullopt;
+
+            current_idx_++;
+            if (current_idx_ < history_.size())
+            {
+                return history_[current_idx_];
+            }
+            return std::nullopt;
+        }
+
+        /// @brief Clear all history
+        void clear()
+        {
+            history_.clear();
+            current_idx_ = 0;
+        }
+
+        /// @brief Check if history is empty
+        bool empty() const
+        {
+            return history_.empty();
+        }
+
+    private:
+        std::vector<State> history_;
+        size_t current_idx_ = 0;
+    };
+
     /// @brief An interactive text input field
     class Input : public Widget
+
     {
     public:
         Input()
@@ -5442,7 +5542,7 @@ namespace cpptui
                 bool changed = false;
 
                 // Handle Ctrl+A
-                if (event.ctrl && (event.key == 'a' || event.key == 1))
+                if (event.is_select_all())
                 {
                     selection_state_.drag_start_idx = 0;
                     cursor_char_pos_ = (int)count_chars();
@@ -5452,9 +5552,34 @@ namespace cpptui
                     return true;
                 }
 
+                // Handle Undo (Ctrl+Z)
+                if (event.is_undo())
+                {
+                    auto prev_state = undo_history_.undo(get_current_state());
+                    if (prev_state)
+                    {
+                        restore_state(*prev_state);
+                        if (on_change)
+                            on_change(value_);
+                    }
+                    return true;
+                }
+
+                // Handle Redo (Ctrl+Shift+Z or Ctrl+Y)
+                if (event.is_redo())
+                {
+                    auto next_state = undo_history_.redo();
+                    if (next_state)
+                    {
+                        restore_state(*next_state);
+                        if (on_change)
+                            on_change(value_);
+                    }
+                    return true;
+                }
+
                 // Handle Copy
-                if ((event.ctrl && event.shift && (event.key == 'c' || event.key == 'C')) ||
-                    (event.ctrl && (event.key == 'c' || event.key == 'C' || event.key == 3)))
+                if (event.is_copy())
                 {
                     if (has_selection())
                         copy_to_clipboard(get_selected_text());
@@ -5462,11 +5587,11 @@ namespace cpptui
                 }
 
                 // Handle Cut
-                if ((event.ctrl && event.shift && (event.key == 'x' || event.key == 'X')) ||
-                    (event.ctrl && (event.key == 'x' || event.key == 'X' || event.key == 24)))
+                if (event.is_cut())
                 {
                     if (has_selection())
                     {
+                        save_undo_state();
                         copy_to_clipboard(get_selected_text());
                         delete_selection();
                         changed = true;
@@ -5478,12 +5603,12 @@ namespace cpptui
                 }
 
                 // Handle Paste
-                if ((event.ctrl && event.shift && (event.key == 'v' || event.key == 'V')) ||
-                    (event.ctrl && (event.key == 'v' || event.key == 'V' || event.key == 22)))
+                if (event.is_paste())
                 {
                     std::string text = paste_from_clipboard();
                     if (!text.empty())
                     {
+                        save_undo_state();
                         if (has_selection())
                             delete_selection();
 
@@ -5513,10 +5638,11 @@ namespace cpptui
                 }
 
                 // Handle Tab
-                if (event.key == 9)
+                if (event.is_tab())
                 {
                     if (accepts_tab)
                     {
+                        save_undo_state();
                         if (has_selection())
                             delete_selection();
                         std::string indent(tab_size, ' ');
@@ -5530,8 +5656,8 @@ namespace cpptui
                 }
 
                 // Navigation Keys
-                bool is_nav_key = event.key == 1068 || event.key == 1067 || // Left/Right
-                                  event.key == 1003 || event.key == 1004;   // Home/End
+                bool is_nav_key = event.is_nav_left() || event.is_nav_right() ||
+                                  event.is_nav_home() || event.is_nav_end();
 
                 if (is_nav_key)
                 {
@@ -5542,14 +5668,14 @@ namespace cpptui
                 }
 
                 // Arrow keys
-                if (event.key == 1068) // Left
+                if (event.is_nav_left())
                 {
                     if (event.ctrl)
                         cursor_char_pos_ = find_prev_word_boundary();
                     else if (cursor_char_pos_ > 0)
                         cursor_char_pos_--;
                 }
-                else if (event.key == 1067) // Right
+                else if (event.is_nav_right())
                 {
                     if (event.ctrl)
                         cursor_char_pos_ = find_next_word_boundary();
@@ -5560,11 +5686,11 @@ namespace cpptui
                             cursor_char_pos_++;
                     }
                 }
-                else if (event.key == 1003) // Home
+                else if (event.is_nav_home())
                 {
                     cursor_char_pos_ = 0;
                 }
-                else if (event.key == 1004) // End
+                else if (event.is_nav_end())
                 {
                     cursor_char_pos_ = (int)count_chars();
                 }
@@ -5582,8 +5708,9 @@ namespace cpptui
                     return true;
                 }
 
-                if (event.key == 8 || event.key == 127) // Backspace
+                if (event.is_backspace())
                 {
+                    save_undo_state();
                     if (has_selection())
                     {
                         delete_selection();
@@ -5598,8 +5725,9 @@ namespace cpptui
                         changed = true;
                     }
                 }
-                else if (event.key == 1005) // Delete
+                else if (event.is_delete())
                 {
+                    save_undo_state();
                     if (has_selection())
                     {
                         delete_selection();
@@ -5619,6 +5747,7 @@ namespace cpptui
                 }
                 else if ((unsigned char)event.key >= 32 && event.key != 127)
                 {
+                    save_undo_state();
                     if (has_selection())
                         delete_selection();
 
@@ -5642,6 +5771,7 @@ namespace cpptui
             // Handle Paste event (bracketed paste)
             if (has_focus() && event.type == EventType::Paste && !event.paste_text.empty())
             {
+                save_undo_state();
                 if (has_selection())
                     delete_selection();
 
@@ -5693,6 +5823,7 @@ namespace cpptui
         {
             if (value_ != v)
             {
+                save_undo_state();
                 value_ = v;
                 clear_selection();
                 // Count characters and set cursor to end
@@ -5728,6 +5859,39 @@ namespace cpptui
         std::string value_;
         size_t cursor_char_pos_ = 0; // Cursor position in characters (not bytes)
         int view_offset_ = 0;        // Horizontal scroll offset (in visual cells)
+
+        // Undo/Redo state
+        struct InputState
+        {
+            std::string value;
+            size_t cursor_pos;
+        };
+        UndoRedoHistory<InputState> undo_history_;
+
+        /// @brief Get current state for undo/redo
+        InputState get_current_state() const
+        {
+            return {value_, cursor_char_pos_};
+        }
+
+        /// @brief Restore state from undo/redo
+        void restore_state(const InputState &state)
+        {
+            value_ = state.value;
+            cursor_char_pos_ = state.cursor_pos;
+            // Clamp cursor position
+            size_t char_count = count_chars();
+            if (cursor_char_pos_ > char_count)
+                cursor_char_pos_ = char_count;
+            clear_selection();
+            update_view_offset();
+        }
+
+        /// @brief Save current state before a modifying operation
+        void save_undo_state()
+        {
+            undo_history_.push(get_current_state());
+        }
 
         void update_view_offset()
         {
@@ -5989,6 +6153,7 @@ namespace cpptui
 
         void set_text(const std::string &text)
         {
+            save_undo_state();
             clear_selection();
             lines_.clear();
             std::string line;
@@ -6505,7 +6670,7 @@ namespace cpptui
                 int current_v_idx = find_v_line(cursor_y_, cursor_x_);
 
                 // Handle Ctrl+A (Select All)
-                if (event.ctrl && (event.key == 'a' || event.key == 1))
+                if (event.is_select_all())
                 {
                     sel_anchor_x_ = 0;
                     sel_anchor_y_ = 0;
@@ -6515,9 +6680,34 @@ namespace cpptui
                     return true;
                 }
 
+                // Handle Undo (Ctrl+Z)
+                if (event.is_undo())
+                {
+                    auto prev_state = undo_history_.undo(get_current_state());
+                    if (prev_state)
+                    {
+                        restore_state(*prev_state);
+                        if (on_change)
+                            on_change(get_text());
+                    }
+                    return true;
+                }
+
+                // Handle Redo (Ctrl+Shift+Z or Ctrl+Y)
+                if (event.is_redo())
+                {
+                    auto next_state = undo_history_.redo();
+                    if (next_state)
+                    {
+                        restore_state(*next_state);
+                        if (on_change)
+                            on_change(get_text());
+                    }
+                    return true;
+                }
+
                 // Handle Copy (Ctrl+Shift+C OR Ctrl+C)
-                if ((event.ctrl && event.shift && (event.key == 'c' || event.key == 'C')) ||
-                    (event.ctrl && (event.key == 'c' || event.key == 'C' || event.key == 3)))
+                if (event.is_copy())
                 {
                     if (has_selection())
                     {
@@ -6527,11 +6717,11 @@ namespace cpptui
                 }
 
                 // Handle Cut (Ctrl+Shift+X OR Ctrl+X)
-                if ((event.ctrl && event.shift && (event.key == 'x' || event.key == 'X')) ||
-                    (event.ctrl && (event.key == 'x' || event.key == 'X' || event.key == 24)))
+                if (event.is_cut())
                 {
                     if (has_selection())
                     {
+                        save_undo_state();
                         copy_to_clipboard(get_selected_text());
                         delete_selection();
                         needs_recalc_max_width_ = true;
@@ -6545,12 +6735,12 @@ namespace cpptui
             }
 
             // Handle Paste (Ctrl+Shift+V OR Ctrl+V)
-            if (has_focus() && ((event.ctrl && event.shift && (event.key == 'v' || event.key == 'V')) ||
-                                (event.ctrl && (event.key == 'v' || event.key == 'V' || event.key == 22))))
+            if (has_focus() && event.is_paste())
             {
                 std::string text = paste_from_clipboard();
                 if (!text.empty())
                 {
+                    save_undo_state();
                     if (has_selection())
                         delete_selection();
 
@@ -6603,6 +6793,7 @@ namespace cpptui
             // Handle Paste event (bracketed paste)
             if (has_focus() && event.type == EventType::Paste && !event.paste_text.empty())
             {
+                save_undo_state();
                 if (has_selection())
                     delete_selection();
 
@@ -6688,10 +6879,11 @@ namespace cpptui
             if (has_focus() && event.type == EventType::Key)
             {
                 // 1. Handle Tab Key (Indentation)
-                if (event.key == 9)
+                if (event.is_tab())
                 {
                     if (accepts_tab)
                     {
+                        save_undo_state();
                         if (has_selection())
                             delete_selection();
 
@@ -6752,9 +6944,10 @@ namespace cpptui
                 }
 
                 // Handle navigation keys with selection
-                bool is_nav_key = (event.key >= 1065 && event.key <= 1069) || // Arrows
-                                  event.key == 1001 || event.key == 1002 ||   // PgUp/PgDn
-                                  event.key == 1003 || event.key == 1004;     // Home/End
+                bool is_nav_key = event.is_nav_up() || event.is_nav_down() ||
+                                  event.is_nav_left() || event.is_nav_right() ||
+                                  event.is_nav_pgup() || event.is_nav_pgdn() ||
+                                  event.is_nav_home() || event.is_nav_end();
 
                 if (is_nav_key)
                 {
@@ -6768,7 +6961,7 @@ namespace cpptui
                     }
                 }
 
-                if (event.key == 1065)
+                if (event.is_nav_up())
                 { // Up
                     if (current_v_idx > 0)
                     {
@@ -6779,7 +6972,7 @@ namespace cpptui
                         cursor_x_ = char_pos_from_visual_in_segment(target_vl, vx);
                     }
                 }
-                else if (event.key == 1066)
+                else if (event.is_nav_down())
                 { // Down
                     if (current_v_idx < (int)virtual_lines_.size() - 1)
                     {
@@ -6790,7 +6983,7 @@ namespace cpptui
                         cursor_x_ = char_pos_from_visual_in_segment(target_vl, vx);
                     }
                 }
-                else if (event.key == 1068)
+                else if (event.is_nav_left())
                 { // Left
                     if (event.ctrl)
                     {
@@ -6809,7 +7002,7 @@ namespace cpptui
                         cursor_x_ = (int)prepare_text_for_render(lines_[cursor_y_]).size();
                     }
                 }
-                else if (event.key == 1067)
+                else if (event.is_nav_right())
                 { // Right
                     if (event.ctrl)
                     {
@@ -6832,7 +7025,7 @@ namespace cpptui
                         }
                     }
                 }
-                else if (event.key == 1003)
+                else if (event.is_nav_home())
                 { // Home
                     if (event.ctrl)
                     {
@@ -6846,7 +7039,7 @@ namespace cpptui
                         cursor_x_ = 0;
                     }
                 }
-                else if (event.key == 1004)
+                else if (event.is_nav_end())
                 { // End
                     if (event.ctrl)
                     {
@@ -6863,7 +7056,7 @@ namespace cpptui
                         cursor_x_ = (int)prepare_text_for_render(lines_[cursor_y_]).size();
                     }
                 }
-                else if (event.key == 1001)
+                else if (event.is_nav_pgup())
                 { // PageUp
                     int vx = get_visual_x_in_segment(virtual_lines_[current_v_idx], cursor_x_);
                     current_v_idx = std::max(0, current_v_idx - height);
@@ -6871,7 +7064,7 @@ namespace cpptui
                     cursor_y_ = target_vl.logical_line_idx;
                     cursor_x_ = char_pos_from_visual_in_segment(target_vl, vx);
                 }
-                else if (event.key == 1002)
+                else if (event.is_nav_pgdn())
                 { // PageDown
                     int vx = get_visual_x_in_segment(virtual_lines_[current_v_idx], cursor_x_);
                     current_v_idx = std::min((int)virtual_lines_.size() - 1, current_v_idx + height);
@@ -6879,8 +7072,9 @@ namespace cpptui
                     cursor_y_ = target_vl.logical_line_idx;
                     cursor_x_ = char_pos_from_visual_in_segment(target_vl, vx);
                 }
-                else if (event.key == 10 || event.key == 13)
+                else if (event.is_enter())
                 { // Enter
+                    save_undo_state();
                     if (has_selection())
                     {
                         delete_selection();
@@ -6894,8 +7088,9 @@ namespace cpptui
                     cursor_x_ = 0;
                     changed = true;
                 }
-                else if (event.key == 127 || event.key == 8)
+                else if (event.is_backspace())
                 { // Backspace
+                    save_undo_state();
                     if (has_selection())
                     {
                         delete_selection();
@@ -6919,8 +7114,9 @@ namespace cpptui
                         changed = true;
                     }
                 }
-                else if (event.key == 1005)
+                else if (event.is_delete())
                 { // Delete
+                    save_undo_state();
                     if (has_selection())
                     {
                         delete_selection();
@@ -6947,6 +7143,7 @@ namespace cpptui
                 }
                 else if ((unsigned char)event.key >= 32 && event.key != 127)
                 {
+                    save_undo_state();
                     if (has_selection())
                     {
                         delete_selection();
@@ -7082,6 +7279,52 @@ namespace cpptui
         int cursor_y_ = 0; // Logical line index
         int scroll_x_ = 0;
         int scroll_y_ = 0;
+
+        // Undo/Redo state
+        struct TextAreaState
+        {
+            std::vector<std::string> lines;
+            int cursor_x;
+            int cursor_y;
+        };
+        UndoRedoHistory<TextAreaState> undo_history_;
+
+        /// @brief Get current state for undo/redo
+        TextAreaState get_current_state() const
+        {
+            return {lines_, cursor_x_, cursor_y_};
+        }
+
+        /// @brief Restore state from undo/redo
+        void restore_state(const TextAreaState &state)
+        {
+            lines_ = state.lines;
+            cursor_x_ = state.cursor_x;
+            cursor_y_ = state.cursor_y;
+            // Ensure at least one empty line
+            if (lines_.empty())
+                lines_.push_back("");
+            // Clamp cursor position
+            if (cursor_y_ >= (int)lines_.size())
+                cursor_y_ = (int)lines_.size() - 1;
+            if (cursor_y_ < 0)
+                cursor_y_ = 0;
+            auto chars = prepare_text_for_render(lines_[cursor_y_]);
+            if (cursor_x_ > (int)chars.size())
+                cursor_x_ = (int)chars.size();
+            if (cursor_x_ < 0)
+                cursor_x_ = 0;
+            clear_selection();
+            needs_recalc_max_width_ = true;
+            recalculate_virtual_lines();
+            ensure_cursor_visible();
+        }
+
+        /// @brief Save current state before a modifying operation
+        void save_undo_state()
+        {
+            undo_history_.push(get_current_state());
+        }
 
         int get_line_number_width() const
         {
@@ -7795,32 +8038,32 @@ namespace cpptui
                 bool handled = false;
 
                 // Standard navigation key handling
-                if (event.key == 1065)
+                if (event.is_nav_up())
                 { // Up
                     scroll_offset--;
                     handled = true;
                 }
-                else if (event.key == 1066)
+                else if (event.is_nav_down())
                 { // Down
                     scroll_offset++;
                     handled = true;
                 }
-                else if (event.key == 1001)
+                else if (event.is_nav_pgup())
                 { // PageUp
                     scroll_offset -= height;
                     handled = true;
                 }
-                else if (event.key == 1002)
+                else if (event.is_nav_pgdn())
                 { // PageDown
                     scroll_offset += height;
                     handled = true;
                 }
-                else if (event.key == 1003)
+                else if (event.is_nav_home())
                 { // Home
                     scroll_offset = 0;
                     handled = true;
                 }
-                else if (event.key == 1004)
+                else if (event.is_nav_end())
                 { // End
                     // Calculate max_scroll later for clamp
                     scroll_offset = content_height; // Clamped by scroll logic
@@ -7942,32 +8185,32 @@ namespace cpptui
                 bool handled = false;
 
                 // Standard Horizontal Keys
-                if (event.key == 1067)
+                if (event.is_nav_right())
                 { // Right
                     scroll_offset++;
                     handled = true;
                 }
-                else if (event.key == 1068)
+                else if (event.is_nav_left())
                 { // Left
                     scroll_offset--;
                     handled = true;
                 }
-                else if (event.key == 1005 || event.key == 1001 || event.key == 53)
+                else if (event.is_nav_pgup() || event.key == 1005 || event.key == 53)
                 { // PageUp -> Left Page
                     scroll_offset -= width;
                     handled = true;
                 }
-                else if (event.key == 1006 || event.key == 1002 || event.key == 54)
+                else if (event.is_nav_pgdn() || event.key == 1006 || event.key == 54)
                 { // PageDown -> Right Page
                     scroll_offset += width;
                     handled = true;
                 }
-                else if (event.key == 1003)
+                else if (event.is_nav_home())
                 { // Home
                     scroll_offset = 0;
                     handled = true;
                 }
-                else if (event.key == 1004)
+                else if (event.is_nav_end())
                 { // End
                     scroll_offset = content_width - width;
                     handled = true;
@@ -7976,22 +8219,22 @@ namespace cpptui
                 // Shift + Modifiers (requested explicitly, though PageUp/Down above already act horizontal here)
                 if (!handled && event.shift)
                 {
-                    if (event.key == 1003)
+                    if (event.is_nav_home())
                     { // Shift+Home
                         scroll_offset = 0;
                         handled = true;
                     }
-                    else if (event.key == 1004)
+                    else if (event.is_nav_end())
                     { // Shift+End
                         scroll_offset = content_width - width;
                         handled = true;
                     }
-                    else if (event.key == 1001 || event.key == 1005 || event.key == 53)
+                    else if (event.is_nav_pgup() || event.key == 1005 || event.key == 53)
                     { // Shift+PageUp
                         scroll_offset -= width;
                         handled = true;
                     }
-                    else if (event.key == 1002 || event.key == 1006 || event.key == 54)
+                    else if (event.is_nav_pgdn() || event.key == 1006 || event.key == 54)
                     { // Shift+PageDown
                         scroll_offset += width;
                         handled = true;
@@ -8462,22 +8705,22 @@ namespace cpptui
             if (event.type == EventType::Key && has_focus())
             {
                 int step = 2; // Slightly faster key scroll
-                if (event.key == 1065)
+                if (event.is_nav_up())
                 {
                     scroll_y -= step;
                     handled = true;
                 } // Up
-                if (event.key == 1066)
+                if (event.is_nav_down())
                 {
                     scroll_y += step;
                     handled = true;
                 } // Down
-                if (event.key == 1067)
+                if (event.is_nav_right())
                 {
                     scroll_x += step;
                     handled = true;
                 } // Right
-                if (event.key == 1068)
+                if (event.is_nav_left())
                 {
                     scroll_x -= step;
                     handled = true;
@@ -8487,22 +8730,22 @@ namespace cpptui
                 int vw = (viewport_w > 0) ? viewport_w : width;
                 if (event.ctrl)
                 {
-                    if (event.key == 1003)
+                    if (event.is_nav_home())
                     { // Ctrl+Home -> Leftmost
                         scroll_x = 0;
                         handled = true;
                     }
-                    else if (event.key == 1004)
+                    else if (event.is_nav_end())
                     { // Ctrl+End -> Rightmost
                         scroll_x = content_width - vw;
                         handled = true;
                     }
-                    else if (event.key == 1001 || event.key == 1005 || event.key == 53)
+                    else if (event.is_nav_pgup() || event.key == 1005 || event.key == 53)
                     { // Ctrl+PageUp -> Left Page
                         scroll_x -= vw;
                         handled = true;
                     }
-                    else if (event.key == 1002 || event.key == 1006 || event.key == 54)
+                    else if (event.is_nav_pgdn() || event.key == 1006 || event.key == 54)
                     { // Ctrl+PageDown -> Right Page
                         scroll_x += vw;
                         handled = true;
@@ -8513,22 +8756,22 @@ namespace cpptui
                     // Standard Vertical Scrolling
                     int vh = (viewport_h > 0) ? viewport_h : height;
 
-                    if (event.key == 1003)
+                    if (event.is_nav_home())
                     { // Home -> Top
                         scroll_y = 0;
                         handled = true;
                     }
-                    else if (event.key == 1004)
+                    else if (event.is_nav_end())
                     { // End -> Bottom
                         scroll_y = content_height - vh;
                         handled = true;
                     }
-                    else if (event.key == 1001 || event.key == 1005 || event.key == 53)
+                    else if (event.is_nav_pgup() || event.key == 1005 || event.key == 53)
                     { // PageUp
                         scroll_y -= vh;
                         handled = true;
                     }
-                    else if (event.key == 1002 || event.key == 1006 || event.key == 54)
+                    else if (event.is_nav_pgdn() || event.key == 1006 || event.key == 54)
                     { // PageDown
                         scroll_y += vh;
                         handled = true;
@@ -9986,6 +10229,7 @@ namespace cpptui
             : style_(style), color_(color)
         {
             focusable = true;
+            tab_stop = false;
         }
 
         /// @brief Set the border title
@@ -9998,6 +10242,8 @@ namespace cpptui
         }
         /// @brief Get the current title
         const std::string &get_title() const { return title_; }
+
+        bool has_selection() const { return selection_state_.has_selection(); }
 
         void layout() override
         {
@@ -10085,7 +10331,7 @@ namespace cpptui
             }
             else if (event.type == EventType::Key)
             {
-                if (has_focus() && event.key == 3) // Ctrl+C (Only if focused)
+                if (has_focus() && event.is_copy())
                 {
                     std::string text = selection_state_.get_selected_text(chars);
                     if (!text.empty())
@@ -12955,22 +13201,22 @@ namespace cpptui
                 double old_val = value;
                 if (!vertical)
                 {
-                    if (event.key == 1067 || event.key == 1000 + 67)
+                    if (event.is_nav_right())
                     {
                         value += step;
                     }
-                    if (event.key == 1068 || event.key == 1000 + 68)
+                    if (event.is_nav_left())
                     {
                         value -= step;
                     }
                 }
                 else
                 {
-                    if (event.key == 1065 || event.key == 1000 + 65)
+                    if (event.is_nav_up())
                     {
                         value += step;
                     }
-                    if (event.key == 1066 || event.key == 1000 + 66)
+                    if (event.is_nav_down())
                     {
                         value -= step;
                     }
@@ -14965,12 +15211,12 @@ namespace cpptui
                 }
                 if (focused_ && event.type == EventType::Key)
                 {
-                    if (event.key == 1068 || event.key == 1000 + 68)
+                    if (event.is_nav_left())
                     {
                         parent->prev();
                         return true;
                     } // Left Arrow
-                    if (event.key == 1067 || event.key == 1000 + 67)
+                    if (event.is_nav_right())
                     {
                         parent->next();
                         return true;
@@ -16746,8 +16992,6 @@ namespace cpptui
 
         void run(std::shared_ptr<Widget> root)
         {
-            // Register signal handler for SIGINT (Ctrl+C)
-            std::signal(SIGINT, signal_handler);
 
             Terminal term;
             term.drainInputBuffer(); // Clear stale events from initialization
@@ -16954,7 +17198,7 @@ namespace cpptui
                     }
 
                     // 1. Mandatory Global Exit (Ctrl+C)
-                    bool is_ctrl_c = (event.type == EventType::Key) && ((event.key == 'c' && event.ctrl) || (event.key == 3));
+                    bool is_ctrl_c = (event.type == EventType::Key) && event.is_copy();
                     if (is_ctrl_c)
                     {
                         // Check if focused widget has selection - if so, let it consume the event for Copy
@@ -16985,6 +17229,11 @@ namespace cpptui
                             else if (auto para = std::dynamic_pointer_cast<Paragraph>(focused_widget_))
                             {
                                 if (para->selectable && para->has_selection())
+                                    handled_as_copy = true;
+                            }
+                            else if (auto border = std::dynamic_pointer_cast<Border>(focused_widget_))
+                            {
+                                if (border->has_selection())
                                     handled_as_copy = true;
                             }
                         }
@@ -17025,7 +17274,7 @@ namespace cpptui
                     }
 
                     // 4. Tab Navigation (if not consumed)
-                    if (event.type == EventType::Key && event.key == 9)
+                    if (event.type == EventType::Key && event.is_tab())
                     {
                         handle_tab(root, event.shift);
                         needs_render = true;
