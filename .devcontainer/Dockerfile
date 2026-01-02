@@ -6,4 +6,5 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     cmake \
     build-essential \
     gdb \
+    xclip \
     && apt-get clean -y && rm -rf /var/lib/apt/lists/*

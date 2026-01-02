@@ -101,6 +101,11 @@ Resizable split panel container.
 - `vertical`: Horizontal or vertical split.
 - Mouse drag to resize.
 
+#### `Stack`
+A container that stacks children on top of each other (z-order).
+- Hints: Useful for overlays or background layers.
+- `layout()`: All visible children are resized to fill the stack (unless fixed size is set).
+
 #### `ScrollableVertical`
 A vertical layout that scrolls if its content exceeds its height.
 - **Clipping**: Content is clipped to the container's bounds.
@@ -243,6 +248,18 @@ Text input field. Focusable.
 - `placeholder`: Text to show when empty.
 - `regex_pattern`: Validation regex (e.g. `^\\d+$`).
 - `empty_char`: Character filler (defaults to space).
+- **Scrolling**: Auto-scrolls horizontally when text exceeds width.
+
+#### `TextArea`
+Multi-line text editor with full scrolling and cursor support.
+- `set_text(string)` / `get_text()`
+- `show_line_numbers`: Toggle line number gutter.
+- `word_wrap`: Enable soft wrapping.
+- `show_scrollbar`: Toggle scrollbars.
+- **Interactions**:
+    - Click to move cursor.
+    - Mouse wheel to scroll (Shift+Wheel for horizontal).
+    - Scrollbar dragging supported.
 
 #### `SearchInput`
 Input with autocomplete dropdown.
@@ -335,6 +352,17 @@ Displays hierarchical data with keyboard navigation and selection.
   - `on_submit`: Called on Enter/Space or double-click.
   - `on_expand`, `on_collapse`: Called when nodes expand/collapse.
 
+#### `TextList`
+Displays a simple list of formatted strings or list items with optional bullets/numbering.
+- `items`: `std::vector<ListItem>`.
+- `add_item(text, level)`: Add an item at a specific nesting level.
+- `style`: `ListStyle::Bullet` or `ListStyle::Numbered`.
+- `bullet_markers`: Custom markers for levels (e.g. `{"- ", "o ", "> "}`).
+- **Features**:
+  - **Selection**: Click or drag to select text (if `selectable` is true).
+  - **Copy**: `Ctrl+C` to copy selected text.
+  - **Word Wrapping**: Automatically wraps text to fit width.
+
 ### Charts
 
 #### `LineChart` / `ScatterChart`
@@ -386,6 +414,7 @@ A popup menu widget with keyboard and mouse support.
 - `items`: List of `MenuItem` with `{label, action, sub_items}`.
 - `mouse_hover_select`: Highlight items on hover.
 - `show(x, y)`: Display at screen position.
+- **Interaction**: Clicking outside closes the menu and propagates the event (allowing fast menu switching).
 
 #### `MenuBar`
 Horizontal top-level menu bar.
@@ -408,6 +437,15 @@ Formatted keyboard shortcut display.
 Multi-section footer bar.
 - `add_section(content, width, alignment)`: Add section.
 - `separator`: Section separator string.
+
+#### `FileExplorer`
+A complete file system browser widget.
+- `FileExplorer(root_path)`: Initialize with a starting directory.
+- `on_file_selected`: Callback `std::function<void(std::string)>` providing the absolute path of the selected file.
+- **Features**:
+  - **Navigation**: Expand/collapse directories using `TreeView` mechanics.
+  - **Icons**: Displays folder and file icons (requires Nerd Fonts or Unicode support).
+  - **Sorting**: Directories listed first, then files.
 
 ## Helper Classes
 

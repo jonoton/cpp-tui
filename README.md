@@ -20,7 +20,7 @@ A lightweight, single-header C++ TUI (Text User Interface) library.
     - **Mouse**: Full tracking support including click, drag, scroll wheel, and hover.
     - **Resize**: Automatic layout updates on window resize (SIGWINCH).
 - **Rich Widget Library**:
-    - **Core**: `Label`, `Paragraph`, `Button`, `Input` (with Regex & Placeholders), `Checkbox`, `ProgressBar`, `Sparkline`, `Spinner`, `Border`.
+    - **Core**: `Label`, `Paragraph`, `Button`, `Input` (with Regex & Placeholders), `TextArea` (Multiline Editor), `Checkbox`, `ProgressBar`, `Sparkline`, `Spinner`, `Border`.
     - **Advanced Inputs**:
         - `ToggleSwitch`: Boolean toggle with custom on/off labels.
         - `NumberInput`: Integer input with stepper buttons (+/-) and validation.
@@ -32,7 +32,8 @@ A lightweight, single-header C++ TUI (Text User Interface) library.
         - `TablePaginated`: Classic data table with automated pagination and footer controls.
         - `TableScrollable`: Efficient, infinite-scroll list with keyboard/mouse navigation (row selection, scrollbar, wheel support).
         - `TreeView`: Hierarchical tree structure.
-    - **Containers**: `Tabs` (tabbed interface with overflow navigation), `Carousel` (slide-show), `ScrollableVertical`, `ScrollableHorizontal`, `ScrollableContainer` (2D panning), `Dialog`.
+        - `TextList`: Formatted lists with bullets or numbering and text selection.
+    - **Containers**: `Tabs` (tabbed interface with overflow navigation), `Carousel` (slide-show), `Stack` (z-ordering), `ScrollableVertical`, `ScrollableHorizontal`, `ScrollableContainer` (2D panning), `Dialog`, `FileExplorer` (File system browser).
     - **Charting**:
         - `LineChart`: Multi-series line graphs (Points, Lines, Braille styles supported) with interactive tooltips.
         - `ScatterChart`: Plot points with custom markers and interactive tooltips.
