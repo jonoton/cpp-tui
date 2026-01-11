@@ -24,7 +24,7 @@ int main() {
 ```
 
 - **Graceful Exit**: `App::quit()` can be called to exit the event loop and restore the terminal state.
-- **Exit Keys**: `register_exit_key(char key)` adds a key that will trigger application exit.
+- **Exit Keys**: `register_exit_key(int key, bool ctrl=false, bool alt=false, bool shift=false)` adds a key that will trigger application exit.
 - **Timers**:
   - `add_timer(interval_ms, callback)`: Schedule a repeating callback. Returns a `TimerId`.
   - `remove_timer(timer_id)`: Stop and remove a timer.
@@ -79,7 +79,7 @@ Global default keybindings are available for text editing widgets (`Input`, `Tex
 - **Paste**: `Ctrl+V` or `Ctrl+Shift+V` (Editable widgets only)
 - **Undo**: `Ctrl+Z` (Editable widgets only)
 - **Redo**: `Ctrl+Shift+Z` or `Ctrl+Y` (Editable widgets only)
-- **Select All**: `Ctrl+A`
+- **Select All**: `Ctrl+A` or **Triple-click**
 
 ## API Reference
 
@@ -240,18 +240,24 @@ Animated activity indicator with multiple styles.
 - Requires `App*` pointer for timer-based animation.
 
 #### `Tooltip`
-Hover-triggered popup.
+Hover-triggered popup with text selection support.
 - `text`: Tooltip content.
 - `attach(widget)`: Attach to target widget.
-- `position`: Top, Bottom, Left, or Right.
+- `position`: Top, Bottom, Left, Right, or Manual.
 - `show()`, `hide()`: Manual control.
+- **Hover Persistence**: Tooltip stays visible when mouse moves into it.
+- **Text Selection**: Click-drag, double-click to select word, or **triple-click to select all**.
+- **Copy**: `Ctrl+C` copies selected text.
 
 #### `Notification`
-Toast-style auto-dismissing messages.
+Toast-style auto-dismissing messages with text selection support.
 - `show(text, type, duration_ms)`: Display notification.
 - `Type`: Info, Success, Warning, Error.
 - `position`: TopRight (default), TopLeft, BottomRight, BottomLeft, TopCenter, BottomCenter.
 - `max_visible`: Maximum concurrent notifications.
+- **Hover Persistence**: Notifications pause auto-dismiss when hovered.
+- **Text Selection**: Click-drag, double-click to select word, or **triple-click to select all**.
+- **Copy**: `Ctrl+C` copies selected text.
 
 ### Advanced Inputs
 
@@ -275,6 +281,7 @@ Multi-line text editor with full scrolling and cursor support.
     - Mouse wheel to scroll (Ctrl+Wheel for horizontal).
     - Scrollbar dragging supported.
 - **Clipboard & History**: Supports Copy, Cut, Paste and Unlimited Undo/Redo history.
+- **Triple Click**: Selects all text.
 
 #### `SearchInput`
 Input with autocomplete dropdown.
@@ -374,7 +381,7 @@ Displays a simple list of formatted strings or list items with optional bullets/
 - `style`: `ListStyle::Bullet` or `ListStyle::Numbered`.
 - `bullet_markers`: Custom markers for levels (e.g. `{"- ", "o ", "> "}`).
 - **Features**:
-  - **Selection**: Click or drag to select text (if `selectable` is true).
+  - **Selection**: Click or drag to select text (if `selectable` is true), double-click for word, triple-click for all.
   - **Copy**: `Ctrl+C` to copy selected text.
   - **Word Wrapping**: Automatically wraps text to fit width.
 
@@ -391,7 +398,8 @@ Plots numerical data (x, y). **Supports interactive data-point tooltips.**
   - `x_tick_formatter`, `y_tick_formatter`: Custom label functions.
   - `label_intermediate_x_ticks`, `label_intermediate_y_ticks`: Show labels for intermediate ticks.
 - **Tooltips**:
-  - `show_tooltip`: Enable/disable interactive tooltips (on hover).
+  - `show_tooltip`: Enable/disable interactive tooltips (on hover). Tooltips linger for 1s after leaving the data point to allow text selection map.
+  - `tooltip_duration_ms`: Duration of the linger effect (default 1000ms).
   - `tooltip_formatter`: `std::function<std::string(const Series&, int, double)>` to customize tooltip text.
 
 #### `BarChart`
@@ -510,4 +518,8 @@ If you are experiencing display issues with wide characters, ensure:
 
 ### Mouse Input Not Working
 If mouse input is not being recognized by the application, check your terminal's mouse settings to ensure that mouse input is being passed through to applications. Some terminals have options like "Mouse Tracking" or "Send mouse events to application" that need to be enabled.
+
+### Ambiguous Width Characters
+Certain Unicode symbols (like `✓` U+2713, `⚠` U+26A0, `✗` U+2717) have "Ambiguous" width in the Unicode standard. Terminals may render them as single-width or double-width depending on fonts and configuration.
+cpp-tui explicitly treats these common icon symbols as **Width 1 (Narrow)** to ensure consistent rendering layout across most terminals. If your terminal forcibly renders these as wide, you may see minor overlap artifacts.
 

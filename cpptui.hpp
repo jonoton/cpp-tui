@@ -83,7 +83,7 @@ namespace cpptui
     };
 
     constexpr int VERSION_MAJOR = 1;
-    constexpr int VERSION_MINOR = 2;
+    constexpr int VERSION_MINOR = 3;
     constexpr int VERSION_PATCH = 0;
 
     inline std::string version()
@@ -177,6 +177,11 @@ namespace cpptui
                 (codepoint >= 0x1DC0 && codepoint <= 0x1DFF) || (codepoint >= 0x20D0 && codepoint <= 0x20FF) ||
                 (codepoint >= 0xFE20 && codepoint <= 0xFE2F))
                 return 0;
+
+            // Explicit Narrow Overrides for ambiguous symbols often used as icons
+            // Checkmark (2713), Ballot X (2717), Warning Sign (26A0)
+            if (codepoint == 0x2713 || codepoint == 0x2717 || codepoint == 0x26A0)
+                return 1;
 
             // Zero-width
             if ((codepoint >= 0x200B && codepoint <= 0x200F) || (codepoint >= 0x2028 && codepoint <= 0x202F) ||
@@ -401,6 +406,8 @@ namespace cpptui
         int drag_start_idx = -1;
         bool inclusive_drag = true; // Default to inclusive (Border/Label style)
 
+        int click_count = 0;
+
         std::chrono::steady_clock::time_point last_click_time;
         int last_click_idx = -1;
 
@@ -434,16 +441,38 @@ namespace cpptui
 
             if (diff < 500 && last_click_idx == char_idx)
             {
-                // Double click - Select word
-                int s = 0, e = 0;
-                TextHelper::select_word_at(chars, char_idx, s, e);
-                start = s;
-                end = e;
-                drag_start_idx = end; // Anchor for drag extension
-                mouse_down = true;
+                click_count++;
+                if (click_count == 2)
+                {
+                    // Double click - Select word
+                    int s = 0, e = 0;
+                    TextHelper::select_word_at(chars, char_idx, s, e);
+                    start = s;
+                    end = e;
+                    drag_start_idx = end; // Anchor for drag extension
+                    mouse_down = true;
+                }
+                else if (click_count == 3)
+                {
+                    // Triple click - Select All
+                    start = 0;
+                    end = (int)chars.size();
+                    drag_start_idx = end;
+                    mouse_down = true;
+                }
+                else
+                {
+                    // Reset to single click behavior if > 3
+                    click_count = 1;
+                    mouse_down = true;
+                    drag_start_idx = char_idx;
+                    start = char_idx;
+                    end = char_idx;
+                }
             }
             else
             {
+                click_count = 1;
                 mouse_down = true;
                 drag_start_idx = char_idx;
                 start = char_idx;
@@ -801,6 +830,29 @@ namespace cpptui
         bool is_nav_end() const { return key == 1004; }
         bool is_nav_pgup() const { return key == 1001; }
         bool is_nav_pgdn() const { return key == 1002; }
+        bool is_insert() const { return key == 1006; }
+
+        // Helpers for read-only view scrolling (includes '5', '6', Delete, Insert)
+        bool is_view_scroll_up() const { return is_nav_pgup() || is_delete() || key == 53; }
+        bool is_view_scroll_down() const { return is_nav_pgdn() || is_insert() || key == 54; }
+
+        // Type checking helpers
+        bool is_key_event() const { return type == EventType::Key; }
+        bool is_mouse_event() const { return type == EventType::Mouse; }
+
+        // Additional key helpers
+        bool is_space() const { return key == ' ' || key == 32; }
+        bool is_escape() const { return key == 27; }
+        bool is_activate() const { return is_enter() || is_space(); }
+        bool is_printable() const { return (unsigned char)key >= 32 && key != 127 && key < 1000; }
+
+        // Mouse wheel direction helpers
+        bool mouse_wheel_up() const { return button == 64; }
+        bool mouse_wheel_down() const { return button == 65; }
+
+        // Navigation combo helpers (for list/grid navigation)
+        bool is_nav_prev() const { return is_nav_up() || is_nav_left(); }
+        bool is_nav_next() const { return is_nav_down() || is_nav_right(); }
     };
 
     /// @brief Represents an RGB color
@@ -1500,12 +1552,12 @@ namespace cpptui
                 bool handled = false;
                 if (horizontal)
                 {
-                    if (event.button == 64)
+                    if (event.mouse_wheel_up())
                     {
                         scroll_offset--;
                         handled = true;
                     } // Left
-                    else if (event.button == 65)
+                    else if (event.mouse_wheel_down())
                     {
                         scroll_offset++;
                         handled = true;
@@ -1513,12 +1565,12 @@ namespace cpptui
                 }
                 else
                 {
-                    if (event.button == 64)
+                    if (event.mouse_wheel_up())
                     {
                         scroll_offset--;
                         handled = true;
                     } // Up
-                    else if (event.button == 65)
+                    else if (event.mouse_wheel_down())
                     {
                         scroll_offset++;
                         handled = true;
@@ -2824,7 +2876,11 @@ namespace cpptui
     class Widget : public std::enable_shared_from_this<Widget>
     {
     public:
-        virtual ~Widget() = default;
+        virtual ~Widget()
+        {
+            if (focused_widget_ == this)
+                focused_widget_ = nullptr;
+        }
 
         /// @brief Render the widget to the buffer
         /// @param buffer The target buffer to render into
@@ -2853,9 +2909,18 @@ namespace cpptui
         void set_focus(bool f)
         {
             if (f)
+            {
+                if (focused_widget_ && focused_widget_ != this)
+                    focused_widget_->set_focus(false);
+                focused_widget_ = this;
                 on_focus();
+            }
             else
+            {
+                if (focused_widget_ == this)
+                    focused_widget_ = nullptr;
                 on_blur();
+            }
         }
 
         /// @brief Check if this widget or any of its descendants has focus
@@ -2989,6 +3054,7 @@ namespace cpptui
         }
 
     protected:
+        inline static Widget *focused_widget_ = nullptr;
         bool focused_ = false;
     };
 
@@ -3072,7 +3138,7 @@ namespace cpptui
 
             bool hit = contains(event.x, event.y);
 
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 if (hit && event.mouse_left() && !event.mouse_motion())
                 {
@@ -3122,7 +3188,7 @@ namespace cpptui
                 return false;
             }
 
-            if (has_focus() && event.type == EventType::Key)
+            if (has_focus() && event.is_key_event())
             {
                 if (event.is_select_all())
                 {
@@ -3288,7 +3354,7 @@ namespace cpptui
             if (!selectable)
                 return false;
 
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 bool hit = (event.x >= x && event.x < x + width &&
                             event.y >= y && event.y < y + height);
@@ -3338,10 +3404,10 @@ namespace cpptui
             }
 
             // Handle keyboard events for copy
-            if (has_focus() && event.type == EventType::Key)
+            if (has_focus() && event.is_key_event())
             {
                 // Handle Ctrl+A (Select All)
-                if (event.ctrl && (event.key == 'a' || event.key == 1))
+                if (event.is_select_all())
                 {
                     auto chars = prepare_text_for_render(text_);
                     selection_state_.start = 0;
@@ -3877,7 +3943,7 @@ namespace cpptui
 
             bool hit = contains(event.x, event.y);
 
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 if (hit && event.mouse_left() && !event.mouse_motion())
                 {
@@ -3931,9 +3997,9 @@ namespace cpptui
                 return false;
             }
 
-            if (has_focus() && event.type == EventType::Key)
+            if (has_focus() && event.is_key_event())
             {
-                if (event.ctrl && (event.key == 'a' || event.key == 1))
+                if (event.is_select_all())
                 {
                     bool has_styled = !styled_content.spans.empty();
                     std::string plain = has_styled ? styled_content.plain_text() : text;
@@ -4313,7 +4379,7 @@ namespace cpptui
 
             bool hit = contains(event.x, event.y);
 
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 if (is_selecting_ && event.mouse_drag())
                 {
@@ -4361,7 +4427,7 @@ namespace cpptui
                 return false;
             }
 
-            if (has_focus() && event.type == EventType::Key)
+            if (has_focus() && event.is_key_event())
             {
                 if (event.is_select_all())
                 {
@@ -5063,7 +5129,7 @@ namespace cpptui
         }
         bool on_event(const Event &event) override
         {
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 bool hit = (event.x >= x && event.x < x + width &&
                             event.y >= y && event.y < y + height);
@@ -5120,10 +5186,10 @@ namespace cpptui
                         return true; // Re-render to clear pressed state
                 }
             }
-            else if (event.type == EventType::Key && focused_)
+            else if (event.is_key_event() && focused_)
             {
-                // Check for Enter (\n or \r) or Space
-                if (event.key == '\n' || event.key == '\r' || event.key == ' ')
+                // Check for Enter or Space
+                if (event.is_activate())
                 {
                     if (on_click_)
                         on_click_();
@@ -5466,7 +5532,7 @@ namespace cpptui
 
         bool on_event(const Event &event) override
         {
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 if (event.x >= x && event.x < x + width && event.y >= y && event.y < y + height)
                 {
@@ -5537,7 +5603,7 @@ namespace cpptui
             }
 
             // Handle Key Events
-            if (has_focus() && event.type == EventType::Key)
+            if (has_focus() && event.is_key_event())
             {
                 bool changed = false;
 
@@ -5745,7 +5811,7 @@ namespace cpptui
                         }
                     }
                 }
-                else if ((unsigned char)event.key >= 32 && event.key != 127)
+                else if (event.is_printable())
                 {
                     save_undo_state();
                     if (has_selection())
@@ -6494,7 +6560,7 @@ namespace cpptui
 
         bool on_event(const Event &event) override
         {
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 bool hit = (event.x >= x && event.x < x + width &&
                             event.y >= y && event.y < y + height);
@@ -6561,13 +6627,37 @@ namespace cpptui
 
                         if (elapsed < 500 && new_cursor_x == last_click_pos_x_ && new_cursor_y == last_click_pos_y_)
                         {
-                            // Double click - select word
-                            select_word_at_ta(new_cursor_x, new_cursor_y);
-                            is_selecting_ = false;
+                            click_count_++;
+                            if (click_count_ == 2)
+                            {
+                                // Double click - select word
+                                select_word_at_ta(new_cursor_x, new_cursor_y);
+                                is_selecting_ = false; // Selecting word sets selection, but doesn't start drag selection mode necessarily
+                            }
+                            else if (click_count_ == 3)
+                            {
+                                // Triple click - select all
+                                cursor_y_ = (int)lines_.size() - 1;
+                                cursor_x_ = (int)TextHelper::count_codepoints(lines_.back());
+                                sel_anchor_y_ = 0;
+                                sel_anchor_x_ = 0;
+                                is_selecting_ = false;
+                            }
+                            else
+                            {
+                                // Reset
+                                click_count_ = 1;
+                                cursor_x_ = new_cursor_x;
+                                cursor_y_ = new_cursor_y;
+                                sel_anchor_x_ = cursor_x_;
+                                sel_anchor_y_ = cursor_y_;
+                                is_selecting_ = true;
+                            }
                         }
                         else
                         {
                             // Start new selection
+                            click_count_ = 1;
                             cursor_x_ = new_cursor_x;
                             cursor_y_ = new_cursor_y;
                             sel_anchor_x_ = cursor_x_;
@@ -6621,9 +6711,9 @@ namespace cpptui
                     if (event.ctrl && !word_wrap)
                     {
                         // Horizontal Scrolling (Ctrl + Wheel)
-                        if (event.button == 64)
+                        if (event.mouse_wheel_up())
                             scroll_x_ = std::max(0, scroll_x_ - 3);
-                        else if (event.button == 65)
+                        else if (event.mouse_wheel_down())
                             scroll_x_ += 3;
 
                         // Dynamic clamping for horizontal scroll
@@ -6645,9 +6735,9 @@ namespace cpptui
                     {
                         // Vertical Scrolling
                         int old_scroll_y = scroll_y_;
-                        if (event.button == 64)
+                        if (event.mouse_wheel_up())
                             scroll_y_ = std::max(0, scroll_y_ - 3);
-                        else if (event.button == 65)
+                        else if (event.mouse_wheel_down())
                             scroll_y_ += 3;
 
                         // Clamp vertical scroll
@@ -6664,7 +6754,7 @@ namespace cpptui
                 return false;
             }
 
-            if (has_focus() && event.type == EventType::Key)
+            if (has_focus() && event.is_key_event())
             {
                 bool changed = false;
                 int current_v_idx = find_v_line(cursor_y_, cursor_x_);
@@ -6876,7 +6966,7 @@ namespace cpptui
             }
 
             // Handle Key Events
-            if (has_focus() && event.type == EventType::Key)
+            if (has_focus() && event.is_key_event())
             {
                 // 1. Handle Tab Key (Indentation)
                 if (event.is_tab())
@@ -6907,7 +6997,7 @@ namespace cpptui
                 int current_v_idx = find_v_line(cursor_y_, cursor_x_);
 
                 // Handle Ctrl+A (Select All)
-                if (event.ctrl && (event.key == 'a' || event.key == 1))
+                if (event.is_select_all())
                 {
                     sel_anchor_x_ = 0;
                     sel_anchor_y_ = 0;
@@ -7056,6 +7146,23 @@ namespace cpptui
                         cursor_x_ = (int)prepare_text_for_render(lines_[cursor_y_]).size();
                     }
                 }
+                else if ((event.ctrl || event.alt || event.shift) && event.is_nav_pgup())
+                { // Ctrl/Alt/Shift + PageUp -> Scroll Left (Horizontal Page Up)
+                    // Scroll view left by one visual width
+                    int text_width = width - get_line_number_width() - (show_scrollbar ? 1 : 0);
+                    scroll_x_ = std::max(0, scroll_x_ - text_width);
+                    return true;
+                }
+                else if ((event.ctrl || event.alt || event.shift) && event.is_nav_pgdn())
+                { // Ctrl/Alt/Shift + PageDown -> Scroll Right (Horizontal Page Down)
+                  // Scroll view right by one visual width
+                    int max_visual_width = get_max_visual_width();
+                    int text_width = width - get_line_number_width() - (show_scrollbar ? 1 : 0);
+                    int max_scroll = std::max(0, max_visual_width - text_width);
+
+                    scroll_x_ = std::min(max_scroll, scroll_x_ + text_width);
+                    return true;
+                }
                 else if (event.is_nav_pgup())
                 { // PageUp
                     int vx = get_visual_x_in_segment(virtual_lines_[current_v_idx], cursor_x_);
@@ -7141,7 +7248,7 @@ namespace cpptui
                         }
                     }
                 }
-                else if ((unsigned char)event.key >= 32 && event.key != 127)
+                else if (event.is_printable())
                 {
                     save_undo_state();
                     if (has_selection())
@@ -7214,7 +7321,7 @@ namespace cpptui
                 on_cursor_move(cursor_x_, cursor_y_);
         }
 
-    private:
+    protected:
         int last_width_ = 0;
         int last_height_ = 0;
         bool last_word_wrap_ = false;
@@ -7440,6 +7547,7 @@ namespace cpptui
         std::chrono::steady_clock::time_point last_click_time_;
         int last_click_pos_x_ = -1;
         int last_click_pos_y_ = -1;
+        int click_count_ = 0;
 
         void select_word_at_ta(int cx, int cy)
         {
@@ -7928,6 +8036,11 @@ namespace cpptui
     class ScrollableVertical : public Container
     {
     public:
+        ScrollableVertical()
+        {
+            focusable = true;
+        }
+
         int scroll_offset = 0;    ///< Current vertical scroll position
         int content_height = 0;   ///< Total height of content
         bool is_dragging = false; ///< Internal state for scrollbar dragging
@@ -8011,7 +8124,7 @@ namespace cpptui
             if (Container::on_event(event))
                 return true;
 
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 if (handle_scrollbar_event(event, x, y, width, height, content_height, scroll_offset, is_dragging, false, [this]()
                                            { set_focus(true); }))
@@ -8019,13 +8132,22 @@ namespace cpptui
                     return true;
                 }
 
+                // Focus on Click if not handled by children (Vertical)
+                if (event.mouse_left())
+                {
+                    if (event.x >= x && event.x < x + width && event.y >= y && event.y < y + height)
+                    {
+                        set_focus(true);
+                    }
+                }
+
                 // Ensure wheel events anywhere in the widget are handled if children didn't
                 if (event.mouse_wheel() && (event.x >= x && event.x < x + width && event.y >= y && event.y < y + height))
                 {
                     int old_scroll = scroll_offset;
-                    if (event.button == 64)
+                    if (event.mouse_wheel_up())
                         scroll_offset = std::max(0, scroll_offset - 3);
-                    else if (event.button == 65)
+                    else if (event.mouse_wheel_down())
                         scroll_offset = std::min(std::max(0, content_height - height), scroll_offset + 3);
 
                     if (scroll_offset != old_scroll)
@@ -8033,7 +8155,7 @@ namespace cpptui
                 }
             }
 
-            if (event.type == EventType::Key)
+            if (event.is_key_event() && (has_focus() || has_focus_within()))
             {
                 bool handled = false;
 
@@ -8168,7 +8290,7 @@ namespace cpptui
         }
         bool on_event(const Event &event) override
         {
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 if (handle_scrollbar_event(event, x, y, width, height, content_width, scroll_offset, is_dragging, true, [this]()
                                            { set_focus(true); }))
@@ -8180,7 +8302,19 @@ namespace cpptui
             if (Horizontal::on_event(event))
                 return true;
 
-            if (event.type == EventType::Key)
+            if (event.is_mouse_event())
+            {
+                // Focus on Click if not handled by children (Horizontal)
+                if (event.mouse_left())
+                {
+                    if (event.x >= x && event.x < x + width && event.y >= y && event.y < y + height)
+                    {
+                        set_focus(true);
+                    }
+                }
+            }
+
+            if (event.is_key_event() && (has_focus() || has_focus_within()))
             {
                 bool handled = false;
 
@@ -8195,12 +8329,12 @@ namespace cpptui
                     scroll_offset--;
                     handled = true;
                 }
-                else if (event.is_nav_pgup() || event.key == 1005 || event.key == 53)
+                else if (event.is_nav_pgup())
                 { // PageUp -> Left Page
                     scroll_offset -= width;
                     handled = true;
                 }
-                else if (event.is_nav_pgdn() || event.key == 1006 || event.key == 54)
+                else if (event.is_nav_pgdn())
                 { // PageDown -> Right Page
                     scroll_offset += width;
                     handled = true;
@@ -8229,12 +8363,12 @@ namespace cpptui
                         scroll_offset = content_width - width;
                         handled = true;
                     }
-                    else if (event.is_nav_pgup() || event.key == 1005 || event.key == 53)
+                    else if (event.is_nav_pgup())
                     { // Shift+PageUp
                         scroll_offset -= width;
                         handled = true;
                     }
-                    else if (event.is_nav_pgdn() || event.key == 1006 || event.key == 54)
+                    else if (event.is_nav_pgdn())
                     { // Shift+PageDown
                         scroll_offset += width;
                         handled = true;
@@ -8600,7 +8734,7 @@ namespace cpptui
         bool on_event(const Event &event) override
         {
             bool handled = false;
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 // Focus on Click
                 if (event.mouse_left())
@@ -8621,12 +8755,12 @@ namespace cpptui
                         if (event.ctrl)
                         {
                             // Ctrl + Wheel -> Horizontal Scroll
-                            if (event.button == 64)
+                            if (event.mouse_wheel_up())
                             { // Wheel Up -> Scroll Left
                                 scroll_x -= step;
                                 handled = true;
                             }
-                            else if (event.button == 65)
+                            else if (event.mouse_wheel_down())
                             { // Wheel Down -> Scroll Right
                                 scroll_x += step;
                                 handled = true;
@@ -8636,12 +8770,12 @@ namespace cpptui
                         {
                             // Standard Wheel -> Vertical Scroll
                             int old_y = scroll_y;
-                            if (event.button == 64)
+                            if (event.mouse_wheel_up())
                             { // Wheel Up -> Scroll Up
                                 scroll_y -= step;
                                 handled = true;
                             }
-                            else if (event.button == 65)
+                            else if (event.mouse_wheel_down())
                             { // Wheel Down -> Scroll Down
                                 scroll_y += step;
                                 handled = true;
@@ -8702,7 +8836,7 @@ namespace cpptui
                     }
                 }
             }
-            if (event.type == EventType::Key && has_focus())
+            if (event.is_key_event() && has_focus())
             {
                 int step = 2; // Slightly faster key scroll
                 if (event.is_nav_up())
@@ -8740,12 +8874,12 @@ namespace cpptui
                         scroll_x = content_width - vw;
                         handled = true;
                     }
-                    else if (event.is_nav_pgup() || event.key == 1005 || event.key == 53)
+                    else if (event.is_view_scroll_up())
                     { // Ctrl+PageUp -> Left Page
                         scroll_x -= vw;
                         handled = true;
                     }
-                    else if (event.is_nav_pgdn() || event.key == 1006 || event.key == 54)
+                    else if (event.is_view_scroll_down())
                     { // Ctrl+PageDown -> Right Page
                         scroll_x += vw;
                         handled = true;
@@ -8766,12 +8900,12 @@ namespace cpptui
                         scroll_y = content_height - vh;
                         handled = true;
                     }
-                    else if (event.is_nav_pgup() || event.key == 1005 || event.key == 53)
+                    else if (event.is_view_scroll_up())
                     { // PageUp
                         scroll_y -= vh;
                         handled = true;
                     }
-                    else if (event.is_nav_pgdn() || event.key == 1006 || event.key == 54)
+                    else if (event.is_view_scroll_down())
                     { // PageDown
                         scroll_y += vh;
                         handled = true;
@@ -8928,7 +9062,7 @@ namespace cpptui
         }
         bool on_event(const Event &event) override
         {
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 if (event.x >= x && event.x < x + width && event.y >= y && event.y < y + height)
                 {
@@ -8939,9 +9073,9 @@ namespace cpptui
                     }
                 }
             }
-            else if (event.type == EventType::Key && has_focus())
+            else if (event.is_key_event() && has_focus())
             {
-                if (event.key == ' ' || event.key == 13)
+                if (event.is_activate())
                 {
                     toggle();
                     return true;
@@ -9107,7 +9241,7 @@ namespace cpptui
 
         bool on_event(const Event &event) override
         {
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 if (event.mouse_left() && event.x >= x && event.x < x + width && event.y >= y && event.y < y + height)
                 {
@@ -9138,7 +9272,7 @@ namespace cpptui
                     }
                 }
             }
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             { // Update Hover
                 if (event.x >= x && event.x < x + width && event.y >= y && event.y < y + height)
                 {
@@ -9187,9 +9321,9 @@ namespace cpptui
                 }
             }
 
-            if (event.type == EventType::Key && has_focus())
+            if (event.is_key_event() && has_focus())
             {
-                if (event.key == 1065 || event.key == 1068)
+                if (event.is_nav_prev())
                 { // Up or Left
                     int new_idx = selected_index - 1;
                     if (new_idx < 0)
@@ -9197,7 +9331,7 @@ namespace cpptui
                     select(new_idx);
                     return true;
                 }
-                if (event.key == 1066 || event.key == 1067)
+                if (event.is_nav_next())
                 { // Down or Right
                     int new_idx = selected_index + 1;
                     if (new_idx >= (int)options.size())
@@ -9345,7 +9479,7 @@ namespace cpptui
 
         bool on_event(const Event &event) override
         {
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 if (event.x >= x && event.x < x + width && event.y >= y && event.y < y + height)
                 {
@@ -9383,23 +9517,23 @@ namespace cpptui
                     }
                 }
             }
-            else if (event.type == EventType::Key && has_focus())
+            else if (event.is_key_event() && has_focus())
             {
-                if (event.key == 1065)
+                if (event.is_nav_up())
                 { // Up
                     cursor_index--;
                     if (cursor_index < 0)
                         cursor_index = options.size() - 1;
                     return true;
                 }
-                if (event.key == 1066)
+                if (event.is_nav_down())
                 { // Down
                     cursor_index++;
                     if (cursor_index >= (int)options.size())
                         cursor_index = 0;
                     return true;
                 }
-                if (event.key == ' ' || event.key == 13)
+                if (event.is_activate())
                 {
                     toggle(cursor_index);
                     return true;
@@ -9531,7 +9665,7 @@ namespace cpptui
 
         bool on_event(const Event &event) override
         {
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 if (event.x >= x && event.x < x + width)
                 {
@@ -9560,9 +9694,9 @@ namespace cpptui
                     set_hovered(false);
                 }
             }
-            else if (event.type == EventType::Key && has_focus())
+            else if (event.is_key_event() && has_focus())
             {
-                if (event.key == 13 || event.key == ' ')
+                if (event.is_activate())
                 {
                     toggle();
                     return true;
@@ -9807,7 +9941,7 @@ namespace cpptui
 
         bool on_event(const Event &event) override
         {
-            if (event.type == EventType::Key)
+            if (event.is_key_event())
             {
                 if (visible_nodes_.empty())
                     return ScrollableVertical::on_event(event);
@@ -9822,7 +9956,7 @@ namespace cpptui
                     }
                 }
 
-                if (event.key == 1065)
+                if (event.is_nav_up())
                 { // Up
                     if (current_idx > 0)
                     {
@@ -9830,7 +9964,7 @@ namespace cpptui
                         return true;
                     }
                 }
-                else if (event.key == 1066)
+                else if (event.is_nav_down())
                 { // Down
                     if (current_idx < (int)visible_nodes_.size() - 1)
                     {
@@ -9847,7 +9981,7 @@ namespace cpptui
                         return true;
                     }
                 }
-                else if (event.key == 1067)
+                else if (event.is_nav_right())
                 { // Right
                     if (selected_node_)
                     {
@@ -9873,7 +10007,7 @@ namespace cpptui
                         return true;
                     }
                 }
-                else if (event.key == 1068)
+                else if (event.is_nav_left())
                 { // Left
                     if (selected_node_)
                     {
@@ -9896,7 +10030,7 @@ namespace cpptui
                         return true;
                     }
                 }
-                else if (event.key == 13 || event.key == 10 || event.key == 32)
+                else if (event.is_activate())
                 { // Enter/Space
                     if (selected_node_)
                     {
@@ -9919,7 +10053,7 @@ namespace cpptui
                     }
                 }
             }
-            else if (event.type == EventType::Mouse)
+            else if (event.is_mouse_event())
             {
                 // Check if mouse is actually over the tree view!
                 bool hit = (event.x >= x && event.x < x + width &&
@@ -9928,9 +10062,9 @@ namespace cpptui
                 if (hit && event.mouse_wheel() && event.ctrl)
                 {
                     int old_x = scroll_x_;
-                    if (event.button == 64)
+                    if (event.mouse_wheel_up())
                         scroll_x_ -= 3; // Left
-                    if (event.button == 65)
+                    if (event.mouse_wheel_down())
                         scroll_x_ += 3; // Right
                     if (scroll_x_ < 0)
                         scroll_x_ = 0;
@@ -10288,7 +10422,7 @@ namespace cpptui
                 start_x = x + width - 2 - title_display_width;
 
             // Handle title selection
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 if (event.y == y && event.x >= start_x && event.x < start_x + title_display_width)
                 {
@@ -10329,7 +10463,7 @@ namespace cpptui
                         return true;
                 }
             }
-            else if (event.type == EventType::Key)
+            else if (event.is_key_event())
             {
                 if (has_focus() && event.is_copy())
                 {
@@ -10822,7 +10956,7 @@ namespace cpptui
                 return true;
 
             // If modal, we assume we want to capture interaction within bounds
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 if (contains(event.x, event.y) && !event.mouse_wheel())
                     return true;
@@ -11276,7 +11410,7 @@ namespace cpptui
 
         bool on_event(const Event &event) override
         {
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 bool hit = (event.x >= x && event.x < x + width && event.y >= y && event.y < y + height);
                 if (hit != hovered_ && !event.mouse_wheel())
@@ -11296,11 +11430,11 @@ namespace cpptui
                     return !event.mouse_wheel();
                 }
             }
-            else if (event.type == EventType::Key)
+            else if (event.is_key_event())
             {
                 if (has_focus())
                 {
-                    if (event.key == ' ' || event.key == 13)
+                    if (event.is_activate())
                     {
                         checked_ = !checked_;
                         if (on_change)
@@ -11454,6 +11588,254 @@ namespace cpptui
     };
 
     /// @brief Base class for chart widgets with shared axis and tooltip functionality
+    class Tooltip : public Widget
+    {
+    public:
+        std::string text;
+        std::shared_ptr<Widget> target;
+        int delay_ms = 500;
+
+        enum class Position
+        {
+            Top,
+            Bottom,
+            Left,
+            Right,
+            Manual // For charts etc.
+        };
+        Position position = Position::Top;
+
+        int manual_x = 0;
+        int manual_y = 0;
+
+        bool visible_ = false;
+        Rect last_bounds;
+        SelectionState selection_state_;
+
+        Tooltip(const std::string &t = "") : text(t) {}
+
+        void attach(std::shared_ptr<Widget> w) { target = w; }
+
+        void show() { visible_ = true; }
+        void hide() { visible_ = false; }
+
+        bool contains(int px, int py) const
+        {
+            if (!visible_)
+                return false;
+            return last_bounds.contains(px, py);
+        }
+
+        bool on_event(const Event &event) override
+        {
+            if (!visible_)
+                return false;
+
+            if (event.is_mouse_event())
+            {
+                // Strict bounds check from known render position
+                bool hit = contains(event.x, event.y);
+
+                // Handle drags outside if we started inside
+                if (selection_state_.mouse_down && event.mouse_drag())
+                {
+                    int rel_x = event.x - (last_bounds.x + 2); // +2 for border + padding
+                    if (event.y != last_bounds.y + 1)
+                        rel_x = -1000; // Only select on text line
+
+                    auto chars = prepare_text_for_render(text);
+                    int char_idx = 0;
+                    int total_w = utf8_display_width(text);
+
+                    if (rel_x >= total_w)
+                        char_idx = (int)chars.size();
+                    else if (rel_x < 0)
+                        char_idx = 0;
+                    else
+                        char_idx = TextHelper::visual_to_char_pos(chars, rel_x);
+
+                    selection_state_.handle_mouse_drag(char_idx);
+                    return true;
+                }
+
+                if (hit)
+                {
+                    if (event.mouse_left())
+                    {
+                        // Calculate hit relative to text start
+                        // Text starts at tip_x + 2, tip_y + 1
+                        int text_start_x = last_bounds.x + 2;
+                        int text_start_y = last_bounds.y + 1;
+
+                        if (event.y == text_start_y)
+                        {
+                            int rel_x = event.x - text_start_x;
+                            auto chars = prepare_text_for_render(text);
+                            int char_idx = TextHelper::visual_to_char_pos(chars, rel_x);
+                            selection_state_.handle_mouse_press(chars, char_idx);
+                            return true;
+                        }
+                        else
+                        {
+                            // Clicked on border/padding, clear selection
+                            selection_state_.clear();
+                            return true;
+                        }
+                    }
+                }
+
+                if (event.mouse_release())
+                {
+                    if (selection_state_.handle_mouse_release())
+                        return true;
+                }
+            }
+            else if (event.is_key_event())
+            {
+                if (event.is_copy() && selection_state_.has_selection())
+                {
+                    std::string sel_text = TextHelper::utf8_substr(text, selection_state_.start, selection_state_.end - selection_state_.start);
+                    copy_to_clipboard(sel_text);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        void render(Buffer &buffer) override
+        {
+            if (!visible_ || text.empty() || !target)
+                return;
+
+            // Bypass parent clipping - tooltips render at screen-absolute coordinates
+            buffer.push_full_clip();
+
+            Color bg = Theme::current().panel_bg;
+            Color fg = Theme::current().foreground;
+            Color border = Theme::current().border;
+            Color sel_bg = Theme::current().selection;
+            Color sel_fg = Color::White();
+
+            int tip_w = utf8_display_width(text) + 4;
+            int tip_h = 3;
+            int tip_x, tip_y;
+
+            switch (position)
+            {
+            case Position::Top:
+                tip_x = target->x + (target->width - tip_w) / 2;
+                tip_y = target->y - tip_h;
+                break;
+            case Position::Bottom:
+                tip_x = target->x + (target->width - tip_w) / 2;
+                tip_y = target->y + target->height;
+                break;
+            case Position::Left:
+                tip_x = target->x - tip_w;
+                tip_y = target->y;
+                break;
+            case Position::Right:
+                tip_x = target->x + target->width;
+                tip_y = target->y;
+                break;
+            case Position::Manual:
+                tip_x = manual_x;
+                tip_y = manual_y;
+                break;
+            }
+
+            if (tip_x < 0)
+                tip_x = 0;
+            if (tip_y < 0)
+                tip_y = 0;
+
+            // Store bounds for hit testing
+            last_bounds.x = tip_x;
+            last_bounds.y = tip_y;
+            last_bounds.width = tip_w;
+            last_bounds.height = tip_h;
+
+            // Draw border
+            for (int j = 0; j < tip_h; ++j)
+            {
+                for (int i = 0; i < tip_w; ++i)
+                {
+                    Cell c;
+                    if (j == 0 && i == 0)
+                        c.content = "┌";
+                    else if (j == 0 && i == tip_w - 1)
+                        c.content = "┐";
+                    else if (j == tip_h - 1 && i == 0)
+                        c.content = "└";
+                    else if (j == tip_h - 1 && i == tip_w - 1)
+                        c.content = "┘";
+                    else if (j == 0 || j == tip_h - 1)
+                        c.content = "─";
+                    else if (i == 0 || i == tip_w - 1)
+                        c.content = "│";
+                    else
+                        c.content = " ";
+                    c.fg_color = border;
+                    c.bg_color = bg;
+                    buffer.set(tip_x + i, tip_y + j, c);
+                }
+            }
+
+            // Draw text - UTF-8 safe
+            size_t pos = 0;
+            int cell_x = 0;
+            int char_idx = 0;
+            while (pos < text.size() && cell_x < (int)text.size())
+            {
+                uint32_t codepoint;
+                int byte_len;
+                if (utf8_decode_codepoint(text, pos, codepoint, byte_len))
+                {
+                    bool selected = selection_state_.is_selected(char_idx);
+
+                    Cell c;
+                    c.content = text.substr(pos, byte_len);
+                    c.fg_color = selected ? sel_fg : fg;
+                    c.bg_color = selected ? sel_bg : bg;
+                    buffer.set(tip_x + 2 + cell_x, tip_y + 1, c);
+                    int dw = char_display_width(codepoint);
+                    if (dw == 2)
+                    {
+                        Cell skip;
+                        skip.content = "";
+                        skip.bg_color = selected ? sel_bg : bg;
+                        buffer.set(tip_x + 2 + cell_x + 1, tip_y + 1, skip);
+                    }
+                    cell_x += (dw > 0 ? dw : 1);
+                    pos += byte_len;
+                    char_idx++;
+                }
+                else
+                {
+                    pos++;
+                }
+            }
+
+            // Restore clipping context
+            buffer.pop_clip();
+        }
+    };
+
+    // Implement Widget tooltip methods now that Tooltip is defined
+    inline void Widget::set_tooltip(std::shared_ptr<Tooltip> t)
+    {
+        tooltip_ = t;
+    }
+
+    inline void Widget::set_tooltip(const std::string &text)
+    {
+        // Create a default tooltip
+        auto t = std::make_shared<Tooltip>(text);
+        t->position = Tooltip::Position::Top;
+        tooltip_ = t;
+    }
+
     class ChartBase : public Widget
     {
     public:
@@ -11479,105 +11861,12 @@ namespace cpptui
 
         // Tooltip settings
         bool show_tooltip = false;
-        bool tooltip_visible_ = false;
-        std::string tooltip_text_;
-        int tooltip_x_ = 0;
-        int tooltip_y_ = 0;
         int tooltip_duration_ms = 1000;
-        std::chrono::steady_clock::time_point last_tooltip_time_;
 
         bool show_legend = false;
+        std::chrono::steady_clock::time_point last_hit_time_;
 
     protected:
-        /// @brief Render tooltip box at current tooltip position
-        void render_chart_tooltip(Buffer &buffer)
-        {
-            if (!show_tooltip || !tooltip_visible_)
-                return;
-
-            Color tip_bg = Theme::current().panel_bg;
-            Color tip_fg = Theme::current().foreground;
-            Color tip_border = Theme::current().border_focus;
-
-            int tip_w = utf8_display_width(tooltip_text_) + 2;
-            int tip_h = 3;
-
-            // Position tooltip (prefer above the point)
-            int tx = tooltip_x_ - tip_w / 2;
-            int ty = tooltip_y_ - tip_h;
-
-            // If above is off-screen, move below
-            if (ty < y)
-                ty = tooltip_y_ + 1;
-
-            // Clamp X to widget bounds
-            if (tx < x)
-                tx = x;
-            if (tx + tip_w > x + width)
-                tx = x + width - tip_w;
-            if (tx < x)
-                tx = x;
-
-            // Final vertical clamp
-            if (ty + tip_h > y + height)
-            {
-                ty = y + height - tip_h;
-                if (ty < y)
-                    ty = y;
-            }
-
-            // Draw box
-            for (int j = 0; j < tip_h; ++j)
-            {
-                for (int i = 0; i < tip_w; ++i)
-                {
-                    Cell c;
-                    c.bg_color = tip_bg;
-                    c.fg_color = tip_border;
-                    if (j == 0 && i == 0)
-                        c.content = "┌";
-                    else if (j == 0 && i == tip_w - 1)
-                        c.content = "┐";
-                    else if (j == tip_h - 1 && i == 0)
-                        c.content = "└";
-                    else if (j == tip_h - 1 && i == tip_w - 1)
-                        c.content = "┘";
-                    else if (j == 0 || j == tip_h - 1)
-                        c.content = "─";
-                    else if (i == 0 || i == tip_w - 1)
-                        c.content = "│";
-                    else
-                        c.content = " ";
-                    buffer.set(tx + i, ty + j, c);
-                }
-            }
-
-            // Draw text using render_utf8_text helper
-            render_utf8_text(buffer, tooltip_text_, tx + 1, ty + 1, tip_w - 2, tip_fg, tip_bg);
-        }
-
-        /// @brief Handle tooltip timeout logic
-        /// @return true if event consumed, false otherwise
-        bool handle_tooltip_timeout(bool hit_found)
-        {
-            if (!hit_found && tooltip_visible_)
-            {
-                auto now = std::chrono::steady_clock::now();
-                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                   now - last_tooltip_time_)
-                                   .count();
-
-                if (elapsed < tooltip_duration_ms)
-                {
-                    return true;
-                }
-
-                tooltip_visible_ = false;
-                return true;
-            }
-            return false;
-        }
-
         /// @brief Format a tick label value
         std::string format_tick_label(double val, bool is_x_axis) const
         {
@@ -11654,7 +11943,7 @@ namespace cpptui
             if (!show_tooltip)
                 return false;
 
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 if (event.mouse_wheel())
                     return false;
@@ -11682,24 +11971,35 @@ namespace cpptui
                                 text = series[hit.series_index].label + ": " + ss.str();
                             }
 
-                            tooltip_text_ = text;
-                            tooltip_x_ = event.x; // Position tooltip near cursor
-                            tooltip_y_ = event.y - 1;
+                            if (!tooltip_)
+                                tooltip_ = std::make_shared<Tooltip>();
 
-                            // Adjust if tooltip goes out of bounds (simple clamp check done in render usually,
-                            // but we want to know relative to cursor)
+                            tooltip_->text = text;
+                            tooltip_->position = Tooltip::Position::Manual;
+                            tooltip_->manual_x = event.x;
+                            tooltip_->manual_y = event.y - 1;
+                            tooltip_->visible = true;
 
-                            tooltip_visible_ = true;
                             hit_found = true;
-                            last_tooltip_time_ = std::chrono::steady_clock::now();
+                            last_hit_time_ = std::chrono::steady_clock::now();
                             return true; // Request redraw
                         }
                     }
                 }
 
-                // Use shared timeout handler
-                if (handle_tooltip_timeout(hit_found))
-                    return true;
+                if (!hit_found)
+                {
+                    if (tooltip_)
+                    {
+                        // Check for linger
+                        auto now = std::chrono::steady_clock::now();
+                        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_hit_time_).count();
+                        if (elapsed >= tooltip_duration_ms)
+                        {
+                            tooltip_ = nullptr;
+                        }
+                    }
+                }
             }
             return false;
         }
@@ -12223,7 +12523,6 @@ namespace cpptui
             }
 
             // 5. Render Tooltip
-            render_chart_tooltip(buffer);
         }
     };
 
@@ -12281,7 +12580,7 @@ namespace cpptui
             if (!show_tooltip)
                 return false;
 
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 if (event.mouse_wheel())
                     return false;
@@ -12306,21 +12605,34 @@ namespace cpptui
                                 text = series[hit.series_index].label + ": " + ss.str();
                             }
 
-                            tooltip_text_ = text;
-                            tooltip_x_ = event.x;
-                            tooltip_y_ = event.y - 1;
+                            if (!tooltip_)
+                                tooltip_ = std::make_shared<Tooltip>();
 
-                            tooltip_visible_ = true;
+                            tooltip_->text = text;
+                            tooltip_->position = Tooltip::Position::Manual;
+                            tooltip_->manual_x = event.x;
+                            tooltip_->manual_y = event.y - 1;
+                            tooltip_->visible = true;
+
                             hit_found = true;
-                            last_tooltip_time_ = std::chrono::steady_clock::now();
+                            last_hit_time_ = std::chrono::steady_clock::now();
                             return true;
                         }
                     }
                 }
 
-                // Use shared timeout handler
-                if (handle_tooltip_timeout(hit_found))
-                    return true;
+                if (!hit_found)
+                {
+                    if (tooltip_)
+                    {
+                        auto now = std::chrono::steady_clock::now();
+                        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_hit_time_).count();
+                        if (elapsed >= tooltip_duration_ms)
+                        {
+                            tooltip_ = nullptr;
+                        }
+                    }
+                }
             }
             return false;
         }
@@ -12709,7 +13021,6 @@ namespace cpptui
             }
 
             // 5. Render Tooltip
-            render_chart_tooltip(buffer);
         }
     };
 
@@ -12759,7 +13070,7 @@ namespace cpptui
             if (!show_tooltip)
                 return false;
 
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 if (event.mouse_wheel())
                     return false;
@@ -12790,20 +13101,34 @@ namespace cpptui
                                 text = s_label + " (" + hit.category + "): " + ss.str();
                             }
 
-                            tooltip_text_ = text;
-                            tooltip_x_ = event.x;
-                            tooltip_y_ = event.y - 1;
+                            if (!tooltip_)
+                                tooltip_ = std::make_shared<Tooltip>();
 
-                            tooltip_visible_ = true;
+                            tooltip_->text = text;
+                            tooltip_->position = Tooltip::Position::Manual;
+                            tooltip_->manual_x = hit.x + hit.width / 2;
+                            tooltip_->manual_y = hit.y - 1;
+                            tooltip_->visible = true;
+
                             hit_found = true;
-                            last_tooltip_time_ = std::chrono::steady_clock::now();
+                            last_hit_time_ = std::chrono::steady_clock::now();
                             return true; // Request redraw
                         }
                     }
                 }
 
-                if (handle_tooltip_timeout(hit_found))
-                    return true;
+                if (!hit_found)
+                {
+                    if (tooltip_)
+                    {
+                        auto now = std::chrono::steady_clock::now();
+                        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_hit_time_).count();
+                        if (elapsed >= tooltip_duration_ms)
+                        {
+                            tooltip_ = nullptr;
+                        }
+                    }
+                }
             }
             return false;
         }
@@ -13088,8 +13413,6 @@ namespace cpptui
                     ly++;
                 }
             }
-
-            render_chart_tooltip(buffer);
         }
     };
 
@@ -13196,7 +13519,7 @@ namespace cpptui
 
         bool on_event(const Event &event) override
         {
-            if (event.type == EventType::Key && focused_)
+            if (event.is_key_event() && focused_)
             {
                 double old_val = value;
                 if (!vertical)
@@ -13230,7 +13553,7 @@ namespace cpptui
                 return value != old_val;
             }
 
-            if (event.type == EventType::Mouse && contains(event.x, event.y) && !event.mouse_wheel())
+            if (event.is_mouse_event() && contains(event.x, event.y) && !event.mouse_wheel())
             {
                 if (event.mouse_left() || event.mouse_drag())
                 {
@@ -13923,7 +14246,7 @@ namespace cpptui
         bool on_event(const Event &event) override
         {
             // Mouse click support - detect clicks on section headers
-            if (event.type == EventType::Mouse && event.button == 0)
+            if (event.is_mouse_event() && event.button == 0)
             {
                 // Check if click is within accordion bounds
                 if (event.x >= x && event.x < x + width && event.y >= y)
@@ -13951,21 +14274,21 @@ namespace cpptui
                 }
             }
 
-            if (event.type == EventType::Key && focused_)
+            if (event.is_key_event() && focused_)
             {
-                if (event.key == 1065 || event.key == 1000 + 65)
+                if (event.is_nav_up())
                 { // Up
                     if (selected_index > 0)
                         selected_index--;
                     return true;
                 }
-                if (event.key == 1066 || event.key == 1000 + 66)
+                if (event.is_nav_down())
                 { // Down
                     if (selected_index < (int)sections.size() - 1)
                         selected_index++;
                     return true;
                 }
-                if (event.key == ' ' || event.key == 13 || event.key == 10)
+                if (event.is_activate())
                 { // Space/Enter
                     toggle(selected_index);
                     layout();
@@ -14102,21 +14425,21 @@ namespace cpptui
         bool on_event(const Event &event) override
         {
             // Keyboard navigation when focused
-            if (event.type == EventType::Key && focused_ && !items.empty())
+            if (event.is_key_event() && focused_ && !items.empty())
             {
-                if (event.key == 1068 || event.key == 1000 + 68)
+                if (event.is_nav_left())
                 { // Left arrow
                     if (selected_index > 0)
                         selected_index--;
                     return true;
                 }
-                if (event.key == 1067 || event.key == 1000 + 67)
+                if (event.is_nav_right())
                 { // Right arrow
                     if (selected_index < (int)items.size() - 1)
                         selected_index++;
                     return true;
                 }
-                if (event.key == ' ' || event.key == 13 || event.key == 10)
+                if (event.is_activate())
                 { // Space/Enter
                     if (selected_index >= 0 && selected_index < (int)items.size())
                     {
@@ -14129,7 +14452,7 @@ namespace cpptui
                 }
             }
 
-            if (event.type == EventType::Mouse && contains(event.x, event.y))
+            if (event.is_mouse_event() && contains(event.x, event.y))
             {
                 // Find which item was clicked
                 int cx = x;
@@ -14381,7 +14704,7 @@ namespace cpptui
 
         bool on_event(const Event &event) override
         {
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 int div_pos = !vertical ? x + (int)(ratio * width) : y + (int)(ratio * height);
                 int mouse_pos = !vertical ? event.x : event.y;
@@ -14698,44 +15021,44 @@ namespace cpptui
         bool on_event(const Event &event) override
         {
             // Let buttons handle their events first
-            if (prev_btn->contains(event.x, event.y) && event.type == EventType::Mouse)
+            if (prev_btn->contains(event.x, event.y) && event.is_mouse_event())
             {
                 return prev_btn->on_event(event);
             }
-            if (next_btn->contains(event.x, event.y) && event.type == EventType::Mouse)
+            if (next_btn->contains(event.x, event.y) && event.is_mouse_event())
             {
                 return next_btn->on_event(event);
             }
 
             // Handle keyboard events for day navigation (when grid is focused)
-            if (event.type == EventType::Key && grid_focus->has_focus())
+            if (event.is_key_event() && grid_focus->has_focus())
             {
                 int num_days = days_in_month();
-                if (event.key == 1068 || event.key == 1000 + 68)
+                if (event.is_nav_left())
                 { // Left
                     if (selected_day > 1)
                         selected_day--;
                     return true;
                 }
-                if (event.key == 1067 || event.key == 1000 + 67)
+                if (event.is_nav_right())
                 { // Right
                     if (selected_day < num_days)
                         selected_day++;
                     return true;
                 }
-                if (event.key == 1065 || event.key == 1000 + 65)
+                if (event.is_nav_up())
                 { // Up
                     if (selected_day > 7)
                         selected_day -= 7;
                     return true;
                 }
-                if (event.key == 1066 || event.key == 1000 + 66)
+                if (event.is_nav_down())
                 { // Down
                     if (selected_day + 7 <= num_days)
                         selected_day += 7;
                     return true;
                 }
-                if (event.key == 13 || event.key == 10)
+                if (event.is_enter())
                 { // Enter
                     if (on_select)
                         on_select(year, month, selected_day);
@@ -14744,7 +15067,7 @@ namespace cpptui
             }
 
             // Mouse click on days grid
-            if (event.type == EventType::Mouse && event.mouse_left())
+            if (event.is_mouse_event() && event.mouse_left())
             {
                 int bx = show_border ? 1 : 0;
                 int by = show_border ? 1 : 0;
@@ -14788,147 +15111,6 @@ namespace cpptui
     /// @brief Input with autocomplete suggestions
 
     /// @brief Tooltip popup for contextual help
-    class Tooltip : public Widget
-    {
-    public:
-        std::string text;
-        std::shared_ptr<Widget> target;
-        int delay_ms = 500;
-
-        enum class Position
-        {
-            Top,
-            Bottom,
-            Left,
-            Right
-        };
-        Position position = Position::Top;
-
-        bool visible_ = false;
-
-        Tooltip(const std::string &t = "") : text(t) {}
-
-        void attach(std::shared_ptr<Widget> w) { target = w; }
-
-        void show() { visible_ = true; }
-        void hide() { visible_ = false; }
-
-        void render(Buffer &buffer) override
-        {
-            if (!visible_ || text.empty() || !target)
-                return;
-
-            // Bypass parent clipping - tooltips render at screen-absolute coordinates
-            buffer.push_full_clip();
-
-            Color bg = Theme::current().panel_bg;
-            Color fg = Theme::current().foreground;
-            Color border = Theme::current().border;
-
-            int tip_w = text.size() + 4;
-            int tip_h = 3;
-            int tip_x, tip_y;
-
-            switch (position)
-            {
-            case Position::Top:
-                tip_x = target->x + (target->width - tip_w) / 2;
-                tip_y = target->y - tip_h;
-                break;
-            case Position::Bottom:
-                tip_x = target->x + (target->width - tip_w) / 2;
-                tip_y = target->y + target->height;
-                break;
-            case Position::Left:
-                tip_x = target->x - tip_w;
-                tip_y = target->y;
-                break;
-            case Position::Right:
-                tip_x = target->x + target->width;
-                tip_y = target->y;
-                break;
-            }
-
-            if (tip_x < 0)
-                tip_x = 0;
-            if (tip_y < 0)
-                tip_y = 0;
-
-            // Draw border
-            for (int j = 0; j < tip_h; ++j)
-            {
-                for (int i = 0; i < tip_w; ++i)
-                {
-                    Cell c;
-                    if (j == 0 && i == 0)
-                        c.content = "┌";
-                    else if (j == 0 && i == tip_w - 1)
-                        c.content = "┐";
-                    else if (j == tip_h - 1 && i == 0)
-                        c.content = "└";
-                    else if (j == tip_h - 1 && i == tip_w - 1)
-                        c.content = "┘";
-                    else if (j == 0 || j == tip_h - 1)
-                        c.content = "─";
-                    else if (i == 0 || i == tip_w - 1)
-                        c.content = "│";
-                    else
-                        c.content = " ";
-                    c.fg_color = border;
-                    c.bg_color = bg;
-                    buffer.set(tip_x + i, tip_y + j, c);
-                }
-            }
-
-            // Draw text - UTF-8 safe
-            size_t pos = 0;
-            int cell_x = 0;
-            while (pos < text.size() && cell_x < (int)text.size())
-            {
-                uint32_t codepoint;
-                int byte_len;
-                if (utf8_decode_codepoint(text, pos, codepoint, byte_len))
-                {
-                    Cell c;
-                    c.content = text.substr(pos, byte_len);
-                    c.fg_color = fg;
-                    c.bg_color = bg;
-                    buffer.set(tip_x + 2 + cell_x, tip_y + 1, c);
-                    int dw = char_display_width(codepoint);
-                    if (dw == 2)
-                    {
-                        Cell skip;
-                        skip.content = "";
-                        skip.bg_color = bg;
-                        buffer.set(tip_x + 2 + cell_x + 1, tip_y + 1, skip);
-                    }
-                    cell_x += (dw > 0 ? dw : 1);
-                    pos += byte_len;
-                }
-                else
-                {
-                    pos++;
-                }
-            }
-
-            // Restore clipping context
-            buffer.pop_clip();
-        }
-    };
-
-    // Implement Widget tooltip methods now that Tooltip is defined
-    inline void Widget::set_tooltip(std::shared_ptr<Tooltip> t)
-    {
-        tooltip_ = t;
-    }
-
-    inline void Widget::set_tooltip(const std::string &text)
-    {
-        // Create a default tooltip
-        auto t = std::make_shared<Tooltip>(text);
-        t->position = Tooltip::Position::Top;
-        tooltip_ = t;
-    }
 
     /// @brief Toast notification that auto-dismisses
     class Notification : public Widget
@@ -14963,6 +15145,12 @@ namespace cpptui
         int max_visible = 3;
         Position position = Position::TopRight;
 
+        // Selection and Interaction Support
+        std::vector<Rect> toast_bounds;
+        SelectionState selection_state_;
+        int selected_msg_index = -1;
+        bool hovered_on_toast = false;
+
         /**
          * @brief Override hit_test to be transparent when no toasts are visible.
          * This prevents empty notification widgets from blocking interaction with widgets behind them.
@@ -14972,10 +15160,13 @@ namespace cpptui
             if (queue.empty())
                 return false;
 
-            // Only return true if (px, py) is on an actual toast.
-            // Notifications are typically aligned by Position, we can check the bounding box of the toasts.
-            // For now, let's at least ensure we don't block if the widget is "empty" (no active messages).
-            return Widget::hit_test(px, py);
+            // Check if point is inside any visible toast
+            for (const auto &bk : toast_bounds)
+            {
+                if (bk.contains(px, py))
+                    return true;
+            }
+            return false;
         }
 
         void show(const std::string &text, Type type = Type::Info, int duration_ms = 3000)
@@ -14985,17 +15176,131 @@ namespace cpptui
 
         void update()
         {
+            // If mouse is hovering over any toast, do NOT expire messages
+            if (hovered_on_toast)
+            {
+                // Update created time to "pause" the timer
+                // Effectively we slide the creation window forward so duration doesn't run out
+                auto now = std::chrono::steady_clock::now();
+                for (auto &m : queue)
+                {
+                    // This is a simple trick: if we are hovering, we just keep bumping the created time
+                    // or we could track "paused" state.
+                    // A simpler approach for the user experience is:
+                    // If hovered, extend lifetime.
+                    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - m.created).count();
+                    if (elapsed >= m.duration_ms - 100)
+                    {                                                                     // If about to expire
+                        m.created = now - std::chrono::milliseconds(m.duration_ms - 500); // Give it 500ms more
+                    }
+                }
+                return;
+            }
+
             auto now = std::chrono::steady_clock::now();
             queue.erase(std::remove_if(queue.begin(), queue.end(), [&](const Message &m)
                                        {
                 auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - m.created).count();
                 return elapsed >= m.duration_ms; }),
                         queue.end());
+
+            // If queue changed and selection was active on a removed item, clear selection
+            if (selected_msg_index >= (int)queue.size())
+            {
+                selected_msg_index = -1;
+                selection_state_.clear();
+            }
+        }
+
+        bool on_event(const Event &event) override
+        {
+            // Update hover state
+            if (event.is_mouse_event())
+            {
+                bool was_hovered = hovered_on_toast;
+                hovered_on_toast = hit_test(event.x, event.y);
+
+                if (hovered_on_toast)
+                {
+                    // Find which toast we are on
+                    int hit_index = -1;
+                    // toast_bounds corresponds to the currently rendered visible messages.
+                    // The render loop iterates: i=0 to count-1.
+                    // toast_bounds are pushed in order.
+                    // However, queue logic in render is: queue[queue.size() - count + i]
+                    // We need to map visual index back to queue index.
+
+                    int count = std::min((int)queue.size(), max_visible);
+                    for (size_t i = 0; i < toast_bounds.size(); ++i)
+                    {
+                        if (toast_bounds[i].contains(event.x, event.y))
+                        {
+                            hit_index = (int)(queue.size() - count + i);
+                            break;
+                        }
+                    }
+
+                    if (event.mouse_left())
+                    {
+                        if (hit_index != -1)
+                        {
+                            if (hit_index != selected_msg_index)
+                            {
+                                selected_msg_index = hit_index;
+                                selection_state_.clear();
+                            }
+
+                            // Handle click for selection
+                            // Calculate local X relative to text start
+                            // Text starts at toast_x + 4
+                            int rx = event.x - (toast_bounds[selected_msg_index - (queue.size() - count)].x + 4);
+
+                            auto &msg = queue[hit_index];
+                            auto chars = prepare_text_for_render(msg.text);
+                            int char_idx = TextHelper::visual_to_char_pos(chars, rx);
+
+                            selection_state_.handle_mouse_press(chars, char_idx);
+                            return true;
+                        }
+                    }
+                    else if (event.mouse_drag() && selection_state_.mouse_down && hit_index == selected_msg_index)
+                    {
+                        // Handle drag
+                        int rx = event.x - (toast_bounds[selected_msg_index - (queue.size() - count)].x + 4);
+                        auto &msg = queue[hit_index];
+                        auto chars = prepare_text_for_render(msg.text);
+                        // Clamp visual pos
+                        int char_idx = TextHelper::visual_to_char_pos(chars, rx);
+                        selection_state_.handle_mouse_drag(char_idx);
+                        return true;
+                    }
+                }
+
+                if (event.mouse_release())
+                {
+                    if (selection_state_.handle_mouse_release())
+                        return true;
+                }
+            }
+            else if (event.is_key_event())
+            {
+                if (event.is_copy() && selection_state_.has_selection() && selected_msg_index != -1 && selected_msg_index < (int)queue.size())
+                {
+                    const auto &msg = queue[selected_msg_index];
+                    std::string sel_text = TextHelper::utf8_substr(msg.text, selection_state_.start, selection_state_.end - selection_state_.start);
+                    copy_to_clipboard(sel_text);
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         void render(Buffer &buffer) override
         {
             update();
+
+            toast_bounds.clear(); // Reset visual bounds frame
 
             if (queue.empty())
                 return;
@@ -15007,6 +15312,8 @@ namespace cpptui
             Color bg_success = Theme::current().success;
             Color bg_warning = Theme::current().warning;
             Color bg_error = Theme::current().error;
+            Color sel_bg = Theme::current().selection;
+            Color sel_fg = Color::White();
 
             int toast_w = 40;
             int toast_h = 1;
@@ -15018,7 +15325,8 @@ namespace cpptui
             int count = std::min((int)queue.size(), max_visible);
             for (int i = 0; i < count; ++i)
             {
-                const auto &msg = queue[queue.size() - count + i];
+                int msg_idx = queue.size() - count + i;
+                const auto &msg = queue[msg_idx];
 
                 Color bg;
                 switch (msg.type)
@@ -15069,6 +15377,14 @@ namespace cpptui
                     break;
                 }
 
+                // Store bounds
+                Rect r;
+                r.x = toast_x;
+                r.y = toast_y;
+                r.width = toast_w;
+                r.height = toast_h;
+                toast_bounds.push_back(r);
+
                 // Background
                 for (int j = 0; j < toast_w; ++j)
                 {
@@ -15101,36 +15417,53 @@ namespace cpptui
                 ic.bg_color = bg;
                 buffer.set(toast_x + 1, toast_y, ic);
 
-                // Text - UTF-8 safe (start at +4 to leave space after icon for wide chars)
-                std::string display = msg.text.substr(0, toast_w - 5);
-                size_t pos = 0;
-                int cell_x = 0;
-                while (pos < display.size() && cell_x < toast_w - 5)
+                // Handle wide icons (e.g. checkmark) by clearing the next cell
+                uint32_t icon_cp;
+                int icon_len;
+                if (utf8_decode_codepoint(icon, 0, icon_cp, icon_len))
                 {
-                    uint32_t codepoint;
-                    int byte_len;
-                    if (utf8_decode_codepoint(display, pos, codepoint, byte_len))
+                    if (char_display_width(icon_cp) == 2)
                     {
-                        Cell c;
-                        c.content = display.substr(pos, byte_len);
-                        c.fg_color = fg;
-                        c.bg_color = bg;
-                        buffer.set(toast_x + 4 + cell_x, toast_y, c);
-                        int dw = char_display_width(codepoint);
-                        if (dw == 2)
+                        Cell skip;
+                        skip.content = " "; // Use space instead of empty string for safety
+                        skip.bg_color = bg;
+                        buffer.set(toast_x + 2, toast_y, skip);
+                    }
+                }
+
+                // Text rendering using standardized helper to match selection logic
+                auto text_chars = prepare_text_for_render(msg.text);
+                int cell_x = 0;
+                int max_text_w = toast_w - 5;
+                bool is_msg_selected = (msg_idx == selected_msg_index);
+
+                for (int char_idx = 0; char_idx < (int)text_chars.size(); ++char_idx)
+                {
+                    const auto &ci = text_chars[char_idx];
+
+                    if (cell_x >= max_text_w)
+                        break;
+
+                    bool selected = is_msg_selected && selection_state_.is_selected(char_idx);
+
+                    Cell c;
+                    c.content = ci.content;
+                    c.fg_color = selected ? sel_fg : fg;
+                    c.bg_color = selected ? sel_bg : bg;
+                    buffer.set(toast_x + 4 + cell_x, toast_y, c);
+
+                    if (ci.display_width == 2)
+                    {
+                        if (cell_x + 1 < max_text_w)
                         {
                             Cell skip;
-                            skip.content = "";
-                            skip.bg_color = bg;
+                            skip.content = ""; // Skip cell for text still uses empty to avoid overwriting
+                            skip.bg_color = selected ? sel_bg : bg;
                             buffer.set(toast_x + 4 + cell_x + 1, toast_y, skip);
                         }
-                        cell_x += (dw > 0 ? dw : 1);
-                        pos += byte_len;
                     }
-                    else
-                    {
-                        pos++;
-                    }
+
+                    cell_x += (ci.display_width > 0 ? ci.display_width : 1);
                 }
             }
 
@@ -15189,7 +15522,7 @@ namespace cpptui
             {
                 if (!parent)
                     return false;
-                if (event.type == EventType::Mouse)
+                if (event.is_mouse_event())
                 {
                     // Strict bounds check + ignore drags
                     bool hit = (event.x >= x && event.x < x + width &&
@@ -15209,7 +15542,7 @@ namespace cpptui
                         }
                     }
                 }
-                if (focused_ && event.type == EventType::Key)
+                if (focused_ && event.is_key_event())
                 {
                     if (event.is_nav_left())
                     {
@@ -15417,14 +15750,14 @@ namespace cpptui
             }
 
             // Keyboard Navigation (if this container has focus directly)
-            if (focused_ && event.type == EventType::Key)
+            if (focused_ && event.is_key_event())
             {
-                if (event.key == 1068 || event.key == 1000 + 68)
+                if (event.is_nav_left())
                 { // Left Arrow
                     prev();
                     return true;
                 }
-                if (event.key == 1067 || event.key == 1000 + 67)
+                if (event.is_nav_right())
                 { // Right Arrow
                     next();
                     return true;
@@ -15796,7 +16129,7 @@ namespace cpptui
             }
 
             // Keyboard navigation when any tab button is focused
-            if (event.type == EventType::Key)
+            if (event.is_key_event())
             {
                 bool any_tab_focused = false;
                 int focused_idx = -1;
@@ -15813,7 +16146,7 @@ namespace cpptui
                 if (any_tab_focused)
                 {
                     // Left/Right arrow to switch focus between tabs
-                    if (event.key == 1068 || event.key == 1000 + 68)
+                    if (event.is_nav_left())
                     { // Left Arrow
                         if (focused_idx > 0)
                         {
@@ -15825,7 +16158,7 @@ namespace cpptui
                             return true;
                         }
                     }
-                    if (event.key == 1067 || event.key == 1000 + 67)
+                    if (event.is_nav_right())
                     { // Right Arrow
                         if (focused_idx < (int)tab_buttons_.size() - 1)
                         {
@@ -15999,7 +16332,7 @@ namespace cpptui
         bool on_event(const Event &event) override
         {
             // 1. Mouse Interaction
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 // Focus Management on Click
                 if (event.mouse_left())
@@ -16032,7 +16365,7 @@ namespace cpptui
                         int ps = get_page_size();
                         int total_rows = (int)rows.size();
 
-                        if (event.button == 64)
+                        if (event.mouse_wheel_up())
                         { // Up
                             if (selected_row_ > 0)
                             {
@@ -16042,7 +16375,7 @@ namespace cpptui
                                 return true;
                             }
                         }
-                        else if (event.button == 65)
+                        else if (event.mouse_wheel_down())
                         { // Down
                             if (selected_row_ < total_rows - 1)
                             {
@@ -16133,7 +16466,7 @@ namespace cpptui
             }
 
             // 2. Input Logic (if focused)
-            if (event.type == EventType::Key && input_page->has_focus())
+            if (event.is_key_event() && input_page->has_focus())
             {
                 if (input_page->on_event(event))
                 {
@@ -16154,7 +16487,7 @@ namespace cpptui
             }
 
             // 3. Hotkeys navigation (only if input NOT focused)
-            if (event.type == EventType::Key && !input_page->has_focus())
+            if (event.is_key_event() && !input_page->has_focus())
             {
                 if (event.key == 'n')
                 {
@@ -16170,7 +16503,7 @@ namespace cpptui
                 int ps = get_page_size();
                 int total_rows = (int)rows.size();
 
-                if (event.key == 1065)
+                if (event.is_nav_up())
                 { // Up
                     if (selected_row_ > 0)
                     {
@@ -16184,7 +16517,7 @@ namespace cpptui
                     if (focused_)
                         return true; // Consume event when focused
                 }
-                if (event.key == 1066)
+                if (event.is_nav_down())
                 { // Down
                     if (selected_row_ < total_rows - 1)
                     {
@@ -16198,7 +16531,7 @@ namespace cpptui
                     if (focused_)
                         return true; // Consume event when focused
                 }
-                if (event.key == 1005 || event.key == 53 || event.key == 1001)
+                if (event.is_view_scroll_up())
                 { // PageUp (1001 often PGUP in this lib)
                     if (current_page > 0)
                     {
@@ -16211,7 +16544,7 @@ namespace cpptui
                     }
                     return true;
                 }
-                if (event.key == 1006 || event.key == 54 || event.key == 1002)
+                if (event.is_view_scroll_down())
                 { // PageDown (1002 often PGDN)
                     int total_pages = (total_rows + ps - 1) / ps;
                     if (current_page < total_pages - 1)
@@ -16225,14 +16558,14 @@ namespace cpptui
                     }
                     return true;
                 }
-                if (event.key == 1003)
+                if (event.is_nav_home())
                 { // Home
                     selected_row_ = 0;
                     current_page = 0;
                     update_input();
                     return true;
                 }
-                if (event.key == 1004)
+                if (event.is_nav_end())
                 { // End
                     selected_row_ = total_rows - 1;
                     int total_pages = (total_rows + ps - 1) / ps;
@@ -16532,7 +16865,7 @@ namespace cpptui
 
         bool on_event(const Event &event) override
         {
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 // SCROLLBAR HANDLING FIRST - before any other mouse processing
                 int sb_x = x + width - 1;
@@ -16596,7 +16929,7 @@ namespace cpptui
                 {
                     if (event.mouse_wheel())
                     {
-                        if (event.button == 64)
+                        if (event.mouse_wheel_up())
                         { // Wheel Up
                             if (selected_index > 0)
                             {
@@ -16607,7 +16940,7 @@ namespace cpptui
                                 return true;
                             }
                         }
-                        else if (event.button == 65)
+                        else if (event.mouse_wheel_down())
                         { // Wheel Down
                             if (selected_index < (int)rows.size() - 1)
                             {
@@ -16669,10 +17002,10 @@ namespace cpptui
                     }
                 }
             }
-            if (event.type == EventType::Key)
+            if (event.is_key_event())
             {
                 bool changed = false;
-                if (event.key == 1065)
+                if (event.is_nav_up())
                 { // Up
                     if (selected_index > 0)
                     {
@@ -16680,7 +17013,7 @@ namespace cpptui
                         changed = true;
                     }
                 }
-                else if (event.key == 1066)
+                else if (event.is_nav_down())
                 { // Down
                     if (selected_index < (int)rows.size() - 1)
                     {
@@ -16688,22 +17021,22 @@ namespace cpptui
                         changed = true;
                     }
                 }
-                else if (event.key == 53 || event.key == 1005 || event.key == 1001)
+                else if (event.is_view_scroll_up())
                 { // PageUp
                     selected_index = std::max(0, selected_index - (height - 2));
                     changed = true;
                 }
-                else if (event.key == 54 || event.key == 1006 || event.key == 1002)
+                else if (event.is_view_scroll_down())
                 { // PageDown
                     selected_index = std::min((int)rows.size() - 1, selected_index + (height - 2));
                     changed = true;
                 }
-                else if (event.key == 1003)
+                else if (event.is_nav_home())
                 { // Home
                     selected_index = 0;
                     changed = true;
                 }
-                else if (event.key == 1004)
+                else if (event.is_nav_end())
                 { // End
                     selected_index = (int)rows.size() - 1;
                     changed = true;
@@ -16878,15 +17211,32 @@ namespace cpptui
         std::chrono::steady_clock::time_point last_resize_req;
         const std::chrono::milliseconds resize_delay = std::chrono::milliseconds(25);
 
-        std::vector<char> exit_keys_;
-        /// @brief Register a key that will exit the application
-        void register_exit_key(char key)
+        struct KeyBinding
         {
-            exit_keys_.push_back(key);
+            int key;
+            bool ctrl;
+            bool alt;
+            bool shift;
+        };
+        std::vector<KeyBinding> exit_keys_;
+
+        /// @brief Register a key that will exit the application
+        void register_exit_key(int key, bool ctrl = false, bool alt = false, bool shift = false)
+        {
+            exit_keys_.push_back({key, ctrl, alt, shift});
         }
 
         // Dialog Stack
         std::vector<std::shared_ptr<Dialog>> dialog_stack;
+
+        // Notification Overlay (for event dispatch)
+        std::shared_ptr<Notification> active_notification_;
+
+        /// @brief Register a notification widget for overlay event dispatch
+        void set_notification(std::shared_ptr<Notification> notif)
+        {
+            active_notification_ = notif;
+        }
 
         /// @brief Open a dialog at a specific screen position
         /// @param d The dialog to open
@@ -17198,12 +17548,50 @@ namespace cpptui
                     }
 
                     // 1. Mandatory Global Exit (Ctrl+C)
-                    bool is_ctrl_c = (event.type == EventType::Key) && event.is_copy();
+                    bool is_ctrl_c = (event.is_key_event()) && event.is_copy();
                     if (is_ctrl_c)
                     {
                         // Check if focused widget has selection - if so, let it consume the event for Copy
                         bool handled_as_copy = false;
-                        if (focused_widget_)
+
+                        // Check active tooltip first
+                        if (active_tooltip_ && active_tooltip_->selection_state_.has_selection())
+                        {
+                            handled_as_copy = true;
+                        }
+
+                        // Check notification widgets (auto-discover from tree)
+                        if (!handled_as_copy && root)
+                        {
+                            std::function<bool(std::shared_ptr<Widget>)> has_notif_selection = [&](std::shared_ptr<Widget> w) -> bool
+                            {
+                                if (!w)
+                                    return false;
+                                if (auto n = std::dynamic_pointer_cast<Notification>(w))
+                                {
+                                    if (n->selection_state_.has_selection())
+                                    {
+                                        return true;
+                                    }
+                                }
+                                if (auto c = std::dynamic_pointer_cast<Container>(w))
+                                {
+                                    for (auto &child : c->get_children())
+                                    {
+                                        if (has_notif_selection(child))
+                                            return true;
+                                    }
+                                }
+                                return false;
+                            };
+                            if (has_notif_selection(root))
+                            {
+                                handled_as_copy = true;
+                            }
+                        }
+
+                        // Check focused widget
+                        if (!handled_as_copy && focused_widget_)
                         {
                             // Try dynamic cast to known widgets with selection
                             if (auto input = std::dynamic_pointer_cast<Input>(focused_widget_))
@@ -17246,9 +17634,73 @@ namespace cpptui
                         // If handled_as_copy, we fall through to "Focused Widget Dispatch"
                     }
 
+                    // 1.5 Contextual Copy (Tooltip / Notification / Hovered Widget)
+                    // Must be handled before Focused Widget or Exit Keys to prevent exit on Ctrl+C and ensure overlay copy works
+                    if (event.is_key_event() && event.is_copy())
+                    {
+                        bool handled = false;
+                        // 1. Active Tooltip (Topmost)
+                        if (active_tooltip_)
+                        {
+                            if (active_tooltip_->on_event(event))
+                            {
+                                handled = true;
+                            }
+                        }
+                        // 2. Notification widgets (auto-discovered from root)
+                        if (!handled && root)
+                        {
+                            std::shared_ptr<Notification> found_notif = nullptr;
+                            std::function<void(std::shared_ptr<Widget>)> find_notif_copy = [&](std::shared_ptr<Widget> w)
+                            {
+                                if (!w || found_notif)
+                                    return;
+                                if (auto n = std::dynamic_pointer_cast<Notification>(w))
+                                {
+                                    // Check if this notification has active selection
+                                    if (n->selection_state_.has_selection())
+                                    {
+                                        found_notif = n;
+                                        return;
+                                    }
+                                }
+                                if (auto c = std::dynamic_pointer_cast<Container>(w))
+                                {
+                                    for (auto &child : c->get_children())
+                                    {
+                                        find_notif_copy(child);
+                                    }
+                                }
+                            };
+                            find_notif_copy(root);
+
+                            if (found_notif && found_notif->on_event(event))
+                            {
+                                handled = true;
+                            }
+                        }
+                        // 3. Hovered Widget (e.g. other overlay-like widgets)
+                        // Only if it's not the focused widget (focused is handled in step 2)
+                        if (!handled && hovered_widget_ && hovered_widget_ != focused_widget_)
+                        {
+                            // Most widgets check has_focus() for keys, but overlays don't have focus
+                            // so this allows them to handle copy if they implement it without focus check.
+                            if (hovered_widget_->on_event(event))
+                            {
+                                handled = true;
+                            }
+                        }
+
+                        if (handled)
+                        {
+                            needs_render = true;
+                            continue;
+                        }
+                    }
+
                     // 2. Focused Widget Dispatch (Keys only)
                     bool consumed = false;
-                    if ((event.type == EventType::Key || event.type == EventType::Paste) && focused_widget_)
+                    if ((event.is_key_event() || event.type == EventType::Paste) && focused_widget_)
                     {
                         consumed = focused_widget_->on_event(event);
                         if (consumed)
@@ -17259,11 +17711,14 @@ namespace cpptui
                     }
 
                     // 3. Registered Exit Keys (if not consumed)
-                    if (event.type == EventType::Key)
+                    if (event.is_key_event())
                     {
-                        for (char k : exit_keys_)
+                        for (const auto &binding : exit_keys_)
                         {
-                            if (event.key == k)
+                            if (event.key == binding.key &&
+                                event.ctrl == binding.ctrl &&
+                                event.alt == binding.alt &&
+                                event.shift == binding.shift)
                             {
                                 running = false;
                                 break;
@@ -17274,7 +17729,7 @@ namespace cpptui
                     }
 
                     // 4. Tab Navigation (if not consumed)
-                    if (event.type == EventType::Key && event.is_tab())
+                    if (event.is_key_event() && event.is_tab())
                     {
                         handle_tab(root, event.shift);
                         needs_render = true;
@@ -17282,10 +17737,55 @@ namespace cpptui
                     }
 
                     // 5. Root Dispatch (Spatial or unhandled keys)
-                    if (event.type == EventType::Mouse || event.type == EventType::Key || event.type == EventType::Paste)
+                    if (event.is_mouse_event() || event.is_key_event() || event.type == EventType::Paste)
                     {
-                        if (event.type == EventType::Mouse)
+                        if (event.is_mouse_event())
                         {
+                            // 5a. Dispatch ALL mouse events to active_tooltip_ if inside bounds
+                            // This handles clicks, drags, and releases for tooltip text selection
+                            if (active_tooltip_ && active_tooltip_->contains(event.x, event.y))
+                            {
+                                if (active_tooltip_->on_event(event))
+                                {
+                                    needs_render = true;
+                                    continue; // Consumed by tooltip
+                                }
+                            }
+
+                            // 5b. Dispatch mouse events to Notification widgets
+                            // Auto-find notification widget by checking if any widget returns true for hit_test
+                            // and is a Notification. We search the root tree for Notification widgets.
+                            {
+                                std::shared_ptr<Notification> found_notif = nullptr;
+                                std::function<void(std::shared_ptr<Widget>)> find_notif = [&](std::shared_ptr<Widget> w)
+                                {
+                                    if (!w || found_notif)
+                                        return;
+                                    if (auto n = std::dynamic_pointer_cast<Notification>(w))
+                                    {
+                                        if (n->hit_test(event.x, event.y))
+                                        {
+                                            found_notif = n;
+                                            return;
+                                        }
+                                    }
+                                    if (auto c = std::dynamic_pointer_cast<Container>(w))
+                                    {
+                                        for (auto &child : c->get_children())
+                                        {
+                                            find_notif(child);
+                                        }
+                                    }
+                                };
+                                find_notif(root);
+
+                                if (found_notif && found_notif->on_event(event))
+                                {
+                                    needs_render = true;
+                                    continue; // Consumed by notification
+                                }
+                            }
+
                             // Global Click-to-Focus
                             if (event.mouse_left())
                             {
@@ -17348,7 +17848,16 @@ namespace cpptui
                         }
 
                         // --- Automatic Tooltip Logic ---
-                        if (event.type == EventType::Mouse && (event.mouse_move() || event.mouse_drag() || event.mouse_motion()))
+                        if (active_tooltip_ && event.is_key_event() && event.is_copy())
+                        {
+                            // Allow tooltip to handle copy if it has selection
+                            if (active_tooltip_->on_event(event))
+                            {
+                                // Tooltip consumed copy
+                            }
+                        }
+
+                        if (event.is_mouse_event() && (event.mouse_move() || event.mouse_drag() || event.mouse_motion()))
                         {
                             std::shared_ptr<Widget> target_widget = nullptr;
 
@@ -17380,40 +17889,104 @@ namespace cpptui
                             // Update Hover State
                             if (target_widget != hovered_widget_)
                             {
-                                // Leave old
-                                if (hovered_widget_)
+                                // Check if we moved INTO the active tooltip or if we are still interacting with it
+                                bool inside_tooltip = false;
+                                if (active_tooltip_ && active_tooltip_->contains(event.x, event.y))
                                 {
-                                    hovered_widget_->set_hovered(false);
-                                    // Hide previous tooltip if active
-                                    if (hovered_widget_->tooltip_)
-                                    {
-                                        hovered_widget_->tooltip_->hide();
-                                        if (active_tooltip_ == hovered_widget_->tooltip_)
-                                            active_tooltip_ = nullptr;
-                                    }
+                                    inside_tooltip = true;
+                                    active_tooltip_->on_event(event); // Delegate events (e.g. selection) to tooltip
                                 }
 
-                                hovered_widget_ = target_widget;
-
-                                // Enter new
-                                if (hovered_widget_)
+                                if (!inside_tooltip)
                                 {
-                                    hovered_widget_->set_hovered(true);
-                                    // Show new tooltip
-                                    if (hovered_widget_->tooltip_)
+                                    // Leave old
+                                    if (hovered_widget_)
                                     {
-                                        hovered_widget_->tooltip_->attach(hovered_widget_);
-                                        hovered_widget_->tooltip_->show();
+                                        hovered_widget_->set_hovered(false);
+                                        // Hide previous tooltip if active
+                                        if (hovered_widget_->tooltip_)
+                                        {
+                                            hovered_widget_->tooltip_->hide();
+                                            if (active_tooltip_ == hovered_widget_->tooltip_)
+                                                active_tooltip_ = nullptr;
+                                        }
+                                    }
+
+                                    hovered_widget_ = target_widget;
+
+                                    // Enter new
+                                    if (hovered_widget_)
+                                    {
+                                        hovered_widget_->set_hovered(true);
+                                        // Show new tooltip
+                                        if (hovered_widget_->tooltip_)
+                                        {
+                                            hovered_widget_->tooltip_->attach(hovered_widget_);
+                                            hovered_widget_->tooltip_->show();
+                                            active_tooltip_ = hovered_widget_->tooltip_;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        active_tooltip_ = nullptr;
+                                    }
+                                    needs_render = true;
+                                }
+                            }
+                            else
+                            {
+                                // Still on same widget, but check if we are also on the tooltip (e.g. overlap or just movement)
+                                // OR if the widget updated its tooltip dynamically (e.g. charts)
+                                if (active_tooltip_)
+                                {
+                                    if (active_tooltip_->contains(event.x, event.y))
+                                    {
+                                        active_tooltip_->on_event(event);
+                                    }
+
+                                    // Check if the hovered widget has changed its tooltip instance or properties
+                                    // This allows charts to update the tooltip text/position while the mouse moves within the SAME widget
+                                    if (hovered_widget_ && hovered_widget_->tooltip_ && hovered_widget_->tooltip_ != active_tooltip_)
+                                    {
+                                        // The widget has swapped its tooltip!
+                                        // Or maybe it just created a new one.
                                         active_tooltip_ = hovered_widget_->tooltip_;
+                                        active_tooltip_->attach(hovered_widget_);
+                                        active_tooltip_->show();
+                                        needs_render = true;
+                                    }
+                                    else if (hovered_widget_ && active_tooltip_ == hovered_widget_->tooltip_)
+                                    {
+                                        // Same instance, but maybe text changed? we assume text update happens in widget::on_event
+                                        // If use Manual position, we need to ensure it's redrawn if moved
+                                        // The app loop redraws if needs_render is true, which usually happens if widget::on_event returns true.
+                                        // Charts return true on mouse move if tooltip changes.
+                                    }
+                                    else if (hovered_widget_ && !hovered_widget_->tooltip_ && active_tooltip_)
+                                    {
+                                        // Widget removed its tooltip dynamically (e.g. chart no longer hovering point)
+                                        // Ensure we only remove it if it was the one we were showing
+                                        // But active_tooltip_ doesn't store "owner", only "target".
+                                        // If target matches hovered_widget_, we can safely remove it.
+                                        if (active_tooltip_->target == hovered_widget_)
+                                        {
+                                            active_tooltip_->hide();
+                                            active_tooltip_ = nullptr;
+                                            needs_render = true;
+                                        }
                                     }
                                 }
-                                else
+                                else if (hovered_widget_ && hovered_widget_->tooltip_)
                                 {
-                                    active_tooltip_ = nullptr;
+                                    // Widget gained a tooltip while we were hovering it!
+                                    active_tooltip_ = hovered_widget_->tooltip_;
+                                    active_tooltip_->attach(hovered_widget_);
+                                    active_tooltip_->show();
+                                    needs_render = true;
                                 }
-                                needs_render = true;
                             }
                         }
+
                         // -----------------------------
 
                         bool dialog_handled = false;
@@ -17598,7 +18171,7 @@ namespace cpptui
 
     inline bool MenuBar::on_event(const Event &event)
     {
-        if (event.type == EventType::Mouse)
+        if (event.is_mouse_event())
         {
             if (event.y == y && event.x >= x && event.x < x + width)
             {
@@ -17685,7 +18258,7 @@ namespace cpptui
             if (!is_open)
                 return false;
 
-            if (event.type == EventType::Mouse && event.mouse_left())
+            if (event.is_mouse_event() && event.mouse_left())
             {
                 if (!contains(event.x, event.y))
                 {
@@ -17714,7 +18287,7 @@ namespace cpptui
                 }
             }
 
-            if (event.type == EventType::Mouse)
+            if (event.is_mouse_event())
             {
                 // Hover Selection
                 if (event.x >= x && event.x < x + width && event.y >= y && event.y < y + height)
@@ -17730,9 +18303,9 @@ namespace cpptui
                     }
                 }
             }
-            if (event.type == EventType::Key)
+            if (event.is_key_event())
             {
-                if (event.key == 27)
+                if (event.is_escape())
                 { // Esc
                     if (on_close)
                         on_close();
@@ -18025,7 +18598,7 @@ namespace cpptui
             return false;
 
         // Mouse Interaction
-        if (event.type == EventType::Mouse)
+        if (event.is_mouse_event())
         {
             if (event.x >= x && event.x < x + width && event.y >= y && event.y < y + height)
             {
@@ -18065,23 +18638,23 @@ namespace cpptui
         }
 
         // Key Interaction
-        if (event.type == EventType::Key)
+        if (event.is_key_event())
         {
-            if (event.key == 1065 || event.key == 1001)
+            if (event.is_nav_prev())
             { // Up
                 selected_index--;
                 if (selected_index < 0)
                     selected_index = items.size() - 1;
                 return true;
             }
-            if (event.key == 1066 || event.key == 1002)
+            if (event.is_nav_next())
             { // Down
                 selected_index++;
                 if (selected_index >= (int)items.size())
                     selected_index = 0;
                 return true;
             }
-            if (event.key == 13)
+            if (event.is_enter())
             { // Enter
                 if (selected_index >= 0 && selected_index < (int)items.size())
                 {
@@ -18092,7 +18665,7 @@ namespace cpptui
                 }
                 return true;
             }
-            if (event.key == 27)
+            if (event.is_escape())
             { // Esc
                 if (app_)
                     app_->close_dialog(std::dynamic_pointer_cast<Dialog>(shared_from_this()));
@@ -18179,7 +18752,7 @@ namespace cpptui
         {
             // Priority 1: Special Key Handling (Navigation & Triggers)
             // Handle BEFORE input to avoid consumption of special combinations
-            if (event.type == EventType::Key && (focused_ || input_->has_focus()))
+            if (event.is_key_event() && (focused_ || input_->has_focus()))
             {
                 // Ctrl+Space to trigger suggestions manually
                 // Also handle key==0 as fallback for terminals that don't properly report Ctrl+Space
@@ -18192,7 +18765,7 @@ namespace cpptui
                 }
 
                 // Down arrow: navigate suggestions if open, or open suggestions if closed
-                if (event.key == 1066)
+                if (event.is_nav_down())
                 { // Down
                     if (show_suggestions_ && selected_suggestion_ < (int)filtered_suggestions_.size() - 1)
                     {
@@ -18210,7 +18783,7 @@ namespace cpptui
                         return true;
                     }
                 }
-                if (event.key == 1065)
+                if (event.is_nav_up())
                 { // Up
                     if (selected_suggestion_ > 0)
                     {
@@ -18221,7 +18794,7 @@ namespace cpptui
                         return true;
                     }
                 }
-                if (event.key == 13 || event.key == 10)
+                if (event.is_enter())
                 { // Enter
                     if (selected_suggestion_ >= 0 && selected_suggestion_ < (int)filtered_suggestions_.size())
                     {
@@ -18234,7 +18807,7 @@ namespace cpptui
                         on_search(input_->get_value());
                     return true;
                 }
-                if (event.key == 27)
+                if (event.is_escape())
                 { // Escape
                     show_suggestions_ = false;
                     close_popup();
@@ -18262,7 +18835,7 @@ namespace cpptui
             }
 
             // Return true for any key event when focused to trigger render
-            if (event.type == EventType::Key && (focused_ || input_->has_focus()))
+            if (event.is_key_event() && (focused_ || input_->has_focus()))
             {
                 return true;
             }
@@ -18593,7 +19166,7 @@ namespace cpptui
 
         bool on_event(const Event &event) override
         {
-            if (event.type == EventType::Mouse && contains(event.x, event.y) && !event.mouse_wheel())
+            if (event.is_mouse_event() && contains(event.x, event.y) && !event.mouse_wheel())
             {
                 if (event.mouse_left() || event.mouse_drag())
                 {
@@ -18643,35 +19216,35 @@ namespace cpptui
                 return true;
             }
 
-            if (event.type == EventType::Key && focused_)
+            if (event.is_key_event() && focused_)
             {
                 float step = 0.05f;
                 bool changed = false;
 
                 // Arrow keys for hue/saturation in gradient mode
                 // Arrow_Left (1068 / D), Arrow_Right (1067 / C), Arrow_Up (1065 / A), Arrow_Down (1066 / B)
-                if (event.key == 1067 || event.key == 1000 + 67)
+                if (event.is_nav_right())
                 { // Right
                     hue += step;
                     if (hue > 1.0f)
                         hue = 1.0f;
                     changed = true;
                 }
-                if (event.key == 1068 || event.key == 1000 + 68)
+                if (event.is_nav_left())
                 { // Left
                     hue -= step;
                     if (hue < 0.0f)
                         hue = 0.0f;
                     changed = true;
                 }
-                if (event.key == 1065 || event.key == 1000 + 65)
+                if (event.is_nav_up())
                 { // Up
                     saturation += step;
                     if (saturation > 1.0f)
                         saturation = 1.0f;
                     changed = true;
                 }
-                if (event.key == 1066 || event.key == 1000 + 66)
+                if (event.is_nav_down())
                 { // Down
                     saturation -= step;
                     if (saturation < 0.0f)
@@ -18696,7 +19269,7 @@ namespace cpptui
                 }
 
                 // Enter to select
-                if (event.key == 13 || event.key == ' ')
+                if (event.is_activate())
                 {
                     if (on_select)
                         on_select(get_color());
