@@ -8,11 +8,14 @@ if(MSVC)
     add_compile_options(/utf-8)
 endif()
 
-include_directories(${CMAKE_SOURCE_DIR})
+include_directories(${PROJECT_SOURCE_DIR})
 
-# Examples
-file(GLOB EXAMPLE_SOURCES "examples/*.cpp")
-foreach(EXAMPLE_SOURCE ${EXAMPLE_SOURCES})
-    get_filename_component(EXAMPLE_NAME ${EXAMPLE_SOURCE} NAME_WE)
-    add_executable(${EXAMPLE_NAME} ${EXAMPLE_SOURCE})
-endforeach()
+option(CPPTUI_BUILD_EXAMPLES "Build the example programs" ON)
+
+if(CPPTUI_BUILD_EXAMPLES)
+    file(GLOB EXAMPLE_SOURCES "examples/*.cpp")
+    foreach(EXAMPLE_SOURCE ${EXAMPLE_SOURCES})
+        get_filename_component(EXAMPLE_NAME ${EXAMPLE_SOURCE} NAME_WE)
+        add_executable(${EXAMPLE_NAME} ${EXAMPLE_SOURCE})
+    endforeach()
+endif()
