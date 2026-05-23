@@ -58,6 +58,7 @@ This project uses **CMake**.
    cmake ..
    make
    ```
+   *Note: Examples are built by default when compiling this repository directly. You can disable them by passing `-DCPPTUI_BUILD_EXAMPLES=OFF` to CMake.*
 
 2. **Run Examples**:
    - **Widget Demo** (Feature Showcase):
@@ -79,7 +80,7 @@ This project uses **CMake**.
 
 ## Quick Start
 
-You can use `cpp-tui` by simply copying `cpptui.hpp` to your project. Alternatively, if you use **CMake**, you can integrate it via `add_subdirectory` or `FetchContent`:
+You can use `cpp-tui` by simply copying `cpptui.hpp` to your project. Alternatively, if you use **CMake**, you can integrate it via `add_subdirectory` or `FetchContent`. The examples are disabled by default when imported as a subproject.
 
 ```cmake
 # Example using FetchContent

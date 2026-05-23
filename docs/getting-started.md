@@ -27,6 +27,8 @@ No external dependencies are required.
 
 #### CMake
 
+*Note: The `cpp-tui` examples are not built by default when imported as a subproject.*
+
 **Using `add_subdirectory`**
 
 If you include `cpp-tui` as a Git submodule or copy the repository into your project, you can add it directly:

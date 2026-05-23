@@ -36,6 +36,17 @@
 
 namespace cpptui
 {
+    constexpr int VERSION_MAJOR = 1;
+    constexpr int VERSION_MINOR = 5;
+    constexpr int VERSION_PATCH = 1;
+
+    inline std::string version()
+    {
+        return std::to_string(VERSION_MAJOR) + "." +
+               std::to_string(VERSION_MINOR) + "." +
+               std::to_string(VERSION_PATCH);
+    }
+
     class App;
     class Dialog;
 
@@ -83,17 +94,6 @@ namespace cpptui
             return {nx, ny, nw, nh};
         }
     };
-
-    constexpr int VERSION_MAJOR = 1;
-    constexpr int VERSION_MINOR = 5;
-    constexpr int VERSION_PATCH = 0;
-
-    inline std::string version()
-    {
-        return std::to_string(VERSION_MAJOR) + "." +
-               std::to_string(VERSION_MINOR) + "." +
-               std::to_string(VERSION_PATCH);
-    }
 
     inline volatile std::sig_atomic_t g_resize_pending = 0;
 

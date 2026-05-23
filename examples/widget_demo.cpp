@@ -146,17 +146,19 @@ int main()
         pwd->is_password = true;
         pwd->fixed_width = 28;
         pwd_row->add(pwd);
-        
+
         pwd_row->add(std::make_shared<HorizontalSpacer>(1));
         auto show_pwd = std::make_shared<Checkbox>("Show");
         std::weak_ptr<Input> w_pwd = pwd;
-        show_pwd->on_change = [w_pwd](bool checked) {
-            if (auto p = w_pwd.lock()) {
+        show_pwd->on_change = [w_pwd](bool checked)
+        {
+            if (auto p = w_pwd.lock())
+            {
                 p->is_password = !checked;
             }
         };
         pwd_row->add(show_pwd);
-        
+
         sv->add(pwd_row);
 
         sv->add(std::make_shared<VerticalSpacer>(1));

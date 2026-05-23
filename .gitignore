@@ -31,12 +31,14 @@ Thumbs.db
 *_test
 *_demo
 *_sim
-*.txt
 *_logger
 
 # Jekyll
 docs/_site/
 docs/.jekyll-cache/
 docs/.jekyll-metadata/
-.bundle/
+.bundle/*
+!.bundle/config
+docs/.bundle/*
+!docs/.bundle/config
 vendor/

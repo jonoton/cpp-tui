@@ -12,7 +12,13 @@ add_library(cpptui INTERFACE)
 add_library(cpptui::cpptui ALIAS cpptui)
 target_include_directories(cpptui INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
-option(CPPTUI_BUILD_EXAMPLES "Build the example programs" ON)
+if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
+    set(CPPTUI_BUILD_EXAMPLES_DEFAULT ON)
+else()
+    set(CPPTUI_BUILD_EXAMPLES_DEFAULT OFF)
+endif()
+
+option(CPPTUI_BUILD_EXAMPLES "Build the example programs" ${CPPTUI_BUILD_EXAMPLES_DEFAULT})
 
 if(CPPTUI_BUILD_EXAMPLES)
     file(GLOB EXAMPLE_SOURCES "examples/*.cpp")
