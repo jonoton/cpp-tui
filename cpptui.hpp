@@ -16,13 +16,10 @@
 #include <vector>
 #include <functional>
 #include <chrono>
-#include <thread>
 #include <memory>
 #include <sstream>
 #include <csignal>
-#include <deque>
 #include <regex>
-#include <fstream>
 #include <cstdlib>
 #include <cmath>
 #include <iomanip>
@@ -30,7 +27,6 @@
 #include <cstdio>
 #include <algorithm>
 #include <filesystem>
-#include <atomic>
 #include <optional>
 #include <mutex>
 
@@ -97,7 +93,7 @@ namespace cpptui
 
     inline volatile std::sig_atomic_t g_resize_pending = 0;
 
-    inline void handle_winch(int sig)
+    inline void handle_winch([[maybe_unused]] int sig)
     {
         g_resize_pending = 1;
     }
@@ -3058,7 +3054,7 @@ namespace cpptui
         /// @brief Handle an input event
         /// @param event The event to process
         /// @return true if the event was consumed, false otherwise
-        virtual bool on_event(const Event &event) { return false; }
+        virtual bool on_event(const Event &event) { (void)event; return false; }
 
         // Focus management
         bool focusable = false; ///< If true, can receive focus (via click or tab)
@@ -3778,11 +3774,11 @@ namespace cpptui
     class Paragraph : public Widget
     {
     public:
-        /// Plain text content (used if styled_content is empty)
-        std::string text;
-
         /// Styled content with mixed formatting
         StyledText styled_content;
+
+        /// Plain text content (used if styled_content is empty)
+        std::string text;
 
         /// Indentation settings
         int first_line_indent = 0; ///< Spaces before first line
@@ -5365,7 +5361,7 @@ namespace cpptui
                     else
                     {
                         size_t char_count = count_chars();
-                        if (cursor_char_pos_ < (int)char_count)
+                        if (cursor_char_pos_ < char_count)
                             cursor_char_pos_++;
                     }
                 }
@@ -5419,7 +5415,7 @@ namespace cpptui
                     else
                     {
                         size_t char_count = count_chars();
-                        if (cursor_char_pos_ < (int)char_count)
+                        if (cursor_char_pos_ < char_count)
                         {
                             size_t byte_pos = char_to_byte_pos(cursor_char_pos_);
                             size_t next_byte_pos = char_to_byte_pos(cursor_char_pos_ + 1);
@@ -6352,9 +6348,6 @@ namespace cpptui
 
             if (has_focus() && event.is_key_event())
             {
-                bool changed = false;
-                int current_v_idx = find_v_line(cursor_y_, cursor_x_);
-
                 // Handle Ctrl+A (Select All)
                 if (event.is_select_all())
                 {
@@ -8021,7 +8014,7 @@ namespace cpptui
                 height = h;
             }
         }
-        void render(Buffer &buffer) override {}
+        void render(Buffer &buffer) override { (void)buffer; }
     };
 
     /// @brief Invisible horizontal spacing widget for layout padding
@@ -8036,7 +8029,7 @@ namespace cpptui
                 width = w;
             }
         }
-        void render(Buffer &buffer) override {}
+        void render(Buffer &buffer) override { (void)buffer; }
     };
 
     /// @brief Numeric input with optional stepper buttons
@@ -8053,8 +8046,8 @@ namespace cpptui
         int step = 1;
         int min_value = 0;
         int max_value = 100;
-        ButtonPos button_pos = ButtonPos::Right;
         bool show_buttons_ = true;
+        ButtonPos button_pos = ButtonPos::Right;
         std::function<void(int)> on_change;
 
         NumberInput(int val = 0, bool show_buttons = true, ButtonPos pos = ButtonPos::Right)
@@ -8554,9 +8547,9 @@ namespace cpptui
     {
     public:
         // Style: [ OFF ] / [ ON ] or ( ) / (*) with color
-        bool is_on = false;
         StyledText styled_label;
         std::string label;
+        bool is_on = false;
         std::function<void(bool)> on_change;
 
         // Styling
@@ -9418,7 +9411,7 @@ namespace cpptui
 
         TreeNode &add(const std::string &lbl)
         {
-            children.push_back({lbl, {}, false});
+            children.push_back({lbl, {}, false, false, "", "", "", Color()});
             return children.back();
         }
 
@@ -10828,7 +10821,7 @@ namespace cpptui
                 bool is_sel = (i == (size_t)selected_index);
 
                 std::string prefix = is_sel ? selection_indicator : std::string(utf8_display_width(selection_indicator), ' ');
-                int prefix_width = utf8_display_width(prefix);
+                (void)utf8_display_width(prefix);
                 int content_width = width - 4;
 
                 Color n_fg = normal_fg.resolve(Theme::current().foreground);
@@ -11274,7 +11267,7 @@ namespace cpptui
             for (int dx = 0; dx < width; ++dx)
             {
                 int data_idx = start_idx + dx;
-                if (data_idx >= data.size())
+                if (data_idx >= (int)data.size())
                     break;
 
                 float val = data[data_idx];
@@ -11419,7 +11412,7 @@ namespace cpptui
         void show() { visible_ = true; }
         void hide() { visible_ = false; }
 
-        bool contains(int px, int py) const
+        bool contains(int px, int py) const override
         {
             if (!visible_)
                 return false;
@@ -12066,7 +12059,7 @@ namespace cpptui
                 if (label_all_x_ticks && x_tick_count > 1 && draw_width > 20)
                 {
                     // Label all tick positions
-                    int label_spacing = draw_width / x_tick_count;
+                    (void)(draw_width / x_tick_count);
                     for (int t = 0; t < x_tick_count; ++t)
                     {
                         int tick_x = draw_x + (draw_width - 1) * t / (x_tick_count - 1);
@@ -12139,8 +12132,9 @@ namespace cpptui
             for (const auto &s : series)
                 if (s.style == LineStyle::Braille)
                     needs_braille = true;
+            (void)needs_braille;
 
-            for (int s_idx = 0; s_idx < series.size(); ++s_idx)
+            for (int s_idx = 0; s_idx < (int)series.size(); ++s_idx)
             {
                 const auto &s = series[s_idx];
                 if (s.data.empty())
@@ -12190,8 +12184,8 @@ namespace cpptui
                             // Linear Interpolation
                             int idx0 = (int)exact_idx;
                             int idx1 = idx0 + 1;
-                            if (idx1 >= s.data.size())
-                                idx1 = s.data.size() - 1;
+                            if (idx1 >= (int)s.data.size())
+                                idx1 = (int)s.data.size() - 1;
 
                             double frac = exact_idx - idx0;
                             double val = s.data[idx0] * (1.0 - frac) + s.data[idx1] * frac;
@@ -12256,8 +12250,8 @@ namespace cpptui
                             double ratio = (double)dx / (draw_width - 1);
                             data_idx = (int)(ratio * (s.data.size() - 1));
                         }
-                        if (data_idx >= s.data.size())
-                            data_idx = s.data.size() - 1;
+                        if (data_idx >= (int)s.data.size())
+                            data_idx = (int)s.data.size() - 1;
 
                         double val = s.data[data_idx];
                         double norm = (val - min_val) / (max_val - min_val);
@@ -12733,7 +12727,7 @@ namespace cpptui
                         return (int)(norm * (virtual_w - 1));
                     };
 
-                    for (int i = 0; i < s.points.size(); ++i)
+                    for (int i = 0; i < (int)s.points.size(); ++i)
                     {
                         const auto &p = s.points[i];
                         double px = p.first;
@@ -12773,7 +12767,7 @@ namespace cpptui
                 }
                 else
                 {
-                    for (int i = 0; i < s.points.size(); ++i)
+                    for (int i = 0; i < (int)s.points.size(); ++i)
                     {
                         const auto &p = s.points[i];
                         double px = p.first;
@@ -12975,6 +12969,8 @@ namespace cpptui
             int draw_y = y;
             int draw_width = width;
             int draw_height = height;
+            (void)draw_y;
+            (void)draw_height;
 
             // Y-Axis Labels & Margins
             int y_label_width = 6;
@@ -13145,7 +13141,7 @@ namespace cpptui
                 for (int s_idx = 0; s_idx < num_series; ++s_idx)
                 {
                     const auto &s = series[s_idx];
-                    if (c_idx >= s.values.size())
+                    if (c_idx >= (int)s.values.size())
                         continue;
 
                     double val = s.values[c_idx];
@@ -13273,9 +13269,9 @@ namespace cpptui
     class Slider : public Widget
     {
     public:
+        double value = 50.0;
         double min_value = 0.0;
         double max_value = 100.0;
-        double value = 50.0;
         double step = 1.0;
         bool vertical = false;
 
@@ -13442,8 +13438,8 @@ namespace cpptui
     public:
         StyledText styled_text;
         std::string text;
-        Color text_color = Color();
         Color badge_bg = Color();
+        Color text_color = Color();
 
         enum class Style
         {
@@ -14070,7 +14066,7 @@ namespace cpptui
 
         void render(Buffer &buffer) override
         {
-            Color bg = bg_color.resolve(Theme::current().background);
+            (void)bg_color.resolve(Theme::current().background);
             Color h_bg = header_bg.resolve(Theme::current().panel_bg);
             Color h_fg = header_fg.resolve(Theme::current().foreground);
 
@@ -15131,7 +15127,6 @@ namespace cpptui
             // Update hover state
             if (event.is_mouse_event())
             {
-                bool was_hovered = hovered_on_toast;
                 hovered_on_toast = hit_test(event.x, event.y);
 
                 if (hovered_on_toast)
@@ -16542,7 +16537,7 @@ namespace cpptui
             }
             Color r_a = row_color_a.resolve(Theme::current().background);
             Color r_b = row_color_b.resolve(Theme::current().panel_bg);
-            Color b_col = border_color.resolve(Theme::current().border);
+            (void)border_color.resolve(Theme::current().border);
 
             int current_x_offset = x;
 
@@ -16628,7 +16623,7 @@ namespace cpptui
                 if (draw_y >= y + height - 2)
                     break; // Reserve 2 lines for footer (separator + controls)
 
-                bool is_empty = (r >= rows.size());
+                bool is_empty = (r >= (int)rows.size());
                 Color c_row = (r_vis % 2 == 0) ? r_a : r_b;
 
                 // Selection Highlight
@@ -19397,3 +19392,4 @@ namespace cpptui
     };
 
 } // namespace cpptui
+
