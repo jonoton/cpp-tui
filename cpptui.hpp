@@ -3171,7 +3171,7 @@ namespace cpptui
         }
 
         /// @brief Update internal visibility based on current global screen size
-        void update_responsive()
+        virtual void update_responsive()
         {
             if (is_responsive)
             {
