@@ -7709,19 +7709,43 @@ namespace cpptui
 
         bool on_event(const Event &event) override
         {
-            // Delegate to children first to allow nested scrolling (e.g. TextArea in ScrollableVertical)
-            if (Container::on_event(event))
-                return true;
+            // For mouse click/release/drag/motion events, first check whether the cursor is actually
+            // inside this container's bounds. If not, let sibling panes handle it (e.g., SubmitPanel).
+            if ((event.mouse_left() || event.mouse_release() || event.mouse_drag() || event.mouse_motion()) &&
+                !(event.x >= x && event.x < x + width && event.y >= y && event.y < y + height))
+            {
+                return false;
+            }
 
+            // For mouse events, delegate only to visible children whose bounds actually intersect
+            // our clipping area. Scrolled-out-of-view children should not consume clicks meant for
+            // sibling panes (e.g., SubmitPanel below). This fixes unclickable areas correlating with scroll position.
             if (event.is_mouse_event())
             {
+                bool handled = false;
+                int clip_top = y;
+                int clip_bottom = y + height - 1;
+
+                for (auto it = children_.rbegin(); it != children_.rend() && !handled; ++it)
+                {
+                    if (!(*it)->visible) continue;
+                    // Only dispatch to children whose visual area overlaps our clipping region
+                    int child_top = (*it)->y;
+                    int child_bottom = (*it)->y + (*it)->height - 1;
+                    bool in_clip_range = !(child_bottom < clip_top || child_top > clip_bottom);
+                    if (in_clip_range && (*it)->on_event(event))
+                        handled = true;
+                }
+                if (handled) return true;
+
+                // Handle scrollbar only for events within our bounds
                 if (handle_scrollbar_event(event, x, y, width, height, content_height, scroll_offset, is_dragging, false, [this]()
                                            { set_focus(true); }))
                 {
                     return true;
                 }
 
-                // Focus on Click if not handled by children (Vertical)
+                // Focus on Click only when clicking empty space within this container.
                 if (event.mouse_left())
                 {
                     if (event.x >= x && event.x < x + width && event.y >= y && event.y < y + height)
@@ -14615,7 +14639,13 @@ namespace cpptui
         {
             if (event.is_mouse_event())
             {
-                int div_pos = !vertical ? x + (int)(ratio * width) : y + (int)(ratio * height);
+                // Use the same clamped divider position as layout(), so that event handling
+                // matches where the visual divider actually renders. Otherwise clicks near
+                // the unclamped position are consumed as "near_divider" even though they're
+                // visually inside a child pane (causing dead zones where children don't receive events).
+                int div_pos = !vertical
+                    ? std::max(x + min_size1, std::min(x + width - min_size2 - 1, x + (int)(ratio * width)))
+                    : std::max(y + min_size1, std::min(y + height - min_size2 - 1, y + (int)(ratio * height)));
                 int mouse_pos = !vertical ? event.x : event.y;
                 int other_pos = !vertical ? event.y : event.x;
                 int other_start = !vertical ? y : x;
