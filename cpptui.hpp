@@ -3787,6 +3787,10 @@ namespace cpptui
         /// Word wrapping
         bool word_wrap = true; ///< If true, wrap at word boundaries
 
+        /// When true, preserves original whitespace during wrapping instead of normalizing to single spaces.
+        /// Defaults to false for backward compatibility.
+        bool preserve_whitespace = false;
+
         /// Default text styling (for plain text)
         bool bold = false;      ///< Render in bold
         bool italic = false;    ///< Render in italics
@@ -3828,7 +3832,7 @@ namespace cpptui
 
             std::vector<std::string> lines;
             if (word_wrap)
-                lines = wrap_text_static(plain, width, first_line_indent, hanging_indent);
+                lines = wrap_text_static(plain, width, first_line_indent, hanging_indent, preserve_whitespace);
             else
             {
                 std::istringstream stream(plain);
@@ -4006,7 +4010,7 @@ namespace cpptui
             const std::string &plain = text;
             std::vector<std::string> lines;
             if (word_wrap)
-                lines = wrap_text_static(plain, width, first_line_indent, hanging_indent);
+                lines = wrap_text_static(plain, width, first_line_indent, hanging_indent, preserve_whitespace);
             else
             {
                 std::istringstream stream(plain);
@@ -4052,7 +4056,7 @@ namespace cpptui
             selection_state_.end = e;
         }
 
-        static std::vector<std::string> wrap_text_static(const std::string &input, int max_width, int first_indent, int hang_indent)
+        static std::vector<std::string> wrap_text_static(const std::string &input, int max_width, int first_indent, int hang_indent, bool preserve_ws = false)
         {
             std::vector<std::string> result;
             int first_width = max_width - first_indent;
@@ -4071,34 +4075,121 @@ namespace cpptui
                     result.push_back("");
                     continue;
                 }
-                std::vector<std::string> words;
-                std::istringstream word_stream(paragraph_line);
-                std::string word;
-                while (word_stream >> word)
-                    words.push_back(word);
-                if (words.empty())
-                {
-                    result.push_back("");
-                    continue;
-                }
 
-                std::string current_line;
-                int current_width = result.empty() ? first_width : other_width;
-                for (const auto &w : words)
+                /* Legacy mode: use stream extraction which normalizes whitespace. */
+                if (!preserve_ws)
                 {
-                    if (current_line.empty())
-                        current_line = w;
-                    else if ((int)(current_line.length() + 1 + w.length()) <= current_width)
-                        current_line += " " + w;
-                    else
+                    std::vector<std::string> words;
+                    std::istringstream word_stream(paragraph_line);
+                    std::string word;
+                    while (word_stream >> word)
+                        words.push_back(word);
+
+                    if (words.empty())
                     {
-                        result.push_back(current_line);
-                        current_line = w;
-                        current_width = other_width;
+                        result.push_back("");
+                        continue;
                     }
+
+                    std::string current_line;
+                    int current_width = result.empty() ? first_width : other_width;
+                    for (const auto &w : words)
+                    {
+                        if (current_line.empty())
+                            current_line = w;
+                        else if ((int)(current_line.length() + 1 + w.length()) <= current_width)
+                            current_line += " " + w;
+                        else
+                        {
+                            result.push_back(current_line);
+                            current_line = w;
+                            current_width = other_width;
+                        }
+                    }
+                    if (!current_line.empty())
+                        result.push_back(current_line);
                 }
-                if (!current_line.empty())
-                    result.push_back(current_line);
+                /* Preserve mode: tokenize with exact whitespace tracking. */
+                else
+                {
+                    struct WordToken
+                    {
+                        std::string word;       ///< Non-whitespace content (with leading ws prepended)
+                        std::string ws;         ///< Trailing whitespace after the word
+                    };
+                    std::vector<WordToken> words;
+
+                    size_t i = 0;
+                    bool first_token = true;
+                    while (i < paragraph_line.size())
+                    {
+                        /* Capture leading whitespace and prepend to next word */
+                        std::string leading_ws;
+                        if (first_token)
+                        {
+                            size_t ws_start = i;
+                            while (i < paragraph_line.size() && std::isspace(static_cast<unsigned char>(paragraph_line[i])))
+                                ++i;
+                            leading_ws.assign(paragraph_line, ws_start, i - ws_start);
+                            first_token = false;
+                        }
+
+                        if (i >= paragraph_line.size())
+                        {
+                            /* Line is only whitespace */
+                            words.push_back({"", leading_ws});
+                            break;
+                        }
+
+                        /* Collect word characters */
+                        size_t start = i;
+                        while (i < paragraph_line.size() && !std::isspace(static_cast<unsigned char>(paragraph_line[i])))
+                            ++i;
+                        std::string w(paragraph_line, start, i - start);
+
+                        /* Capture trailing whitespace after this word */
+                        size_t ws_start2 = i;
+                        while (i < paragraph_line.size() && std::isspace(static_cast<unsigned char>(paragraph_line[i])))
+                            ++i;
+                        std::string trailing_ws(paragraph_line, ws_start2, i - ws_start2);
+
+                        words.push_back({leading_ws + w, trailing_ws});
+                    }
+
+                    if (words.empty())
+                    {
+                        result.push_back("");
+                        continue;
+                    }
+
+                    /* Rebuild lines preserving original whitespace between words */
+                    std::string current_line;
+                    int current_width = result.empty() ? first_width : other_width;
+                    for (int wi = 0; wi < static_cast<int>(words.size()); ++wi)
+                    {
+                        const auto &w = words[wi].word;
+                        const auto &ws = words[wi].ws;
+                        int unit_len = static_cast<int>(w.length() + ws.length());
+
+                        if (current_line.empty())
+                        {
+                            current_line = w + ws;
+                        }
+                        else if ((int)(current_line.length() + unit_len) <= current_width)
+                        {
+                            current_line += w + ws;
+                        }
+                        else
+                        {
+                            result.push_back(current_line);
+                            /* Strip trailing whitespace when wrapping to avoid lines ending with spaces */
+                            current_line = w;
+                            current_width = other_width;
+                        }
+                    }
+                    if (!current_line.empty())
+                        result.push_back(current_line);
+                }
             }
             return result;
         }
@@ -7710,7 +7801,7 @@ namespace cpptui
         bool on_event(const Event &event) override
         {
             // For mouse click/release/drag/motion events, first check whether the cursor is actually
-            // inside this container's bounds. If not, let sibling panes handle it (e.g., SubmitPanel).
+            // inside this container's bounds. If not, let sibling panes handle it.
             if ((event.mouse_left() || event.mouse_release() || event.mouse_drag() || event.mouse_motion()) &&
                 !(event.x >= x && event.x < x + width && event.y >= y && event.y < y + height))
             {
@@ -7719,7 +7810,7 @@ namespace cpptui
 
             // For mouse events, delegate only to visible children whose bounds actually intersect
             // our clipping area. Scrolled-out-of-view children should not consume clicks meant for
-            // sibling panes (e.g., SubmitPanel below). This fixes unclickable areas correlating with scroll position.
+            // sibling panes. This fixes unclickable areas correlating with scroll position.
             if (event.is_mouse_event())
             {
                 bool handled = false;
