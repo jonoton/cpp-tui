@@ -33,8 +33,8 @@
 namespace cpptui
 {
     constexpr int VERSION_MAJOR = 1;
-    constexpr int VERSION_MINOR = 5;
-    constexpr int VERSION_PATCH = 1;
+    constexpr int VERSION_MINOR = 6;
+    constexpr int VERSION_PATCH = 0;
 
     inline std::string version()
     {
@@ -4114,8 +4114,8 @@ namespace cpptui
                 {
                     struct WordToken
                     {
-                        std::string word;       ///< Non-whitespace content (with leading ws prepended)
-                        std::string ws;         ///< Trailing whitespace after the word
+                        std::string word; ///< Non-whitespace content (with leading ws prepended)
+                        std::string ws;   ///< Trailing whitespace after the word
                     };
                     std::vector<WordToken> words;
 
@@ -7823,7 +7823,8 @@ namespace cpptui
 
                 for (auto it = children_.rbegin(); it != children_.rend() && !handled; ++it)
                 {
-                    if (!(*it)->visible) continue;
+                    if (!(*it)->visible)
+                        continue;
                     // Only dispatch to children whose visual area overlaps our clipping region
                     int child_top = (*it)->y;
                     int child_bottom = (*it)->y + (*it)->height - 1;
@@ -7831,7 +7832,8 @@ namespace cpptui
                     if (in_clip_range && (*it)->on_event(event))
                         handled = true;
                 }
-                if (handled) return true;
+                if (handled)
+                    return true;
 
                 // Handle scrollbar only for events within our bounds
                 if (handle_scrollbar_event(event, x, y, width, height, content_height, scroll_offset, is_dragging, false, [this]()
@@ -8133,7 +8135,7 @@ namespace cpptui
                 height = h;
             }
         }
-        void render(Buffer &) override { }
+        void render(Buffer &) override {}
     };
 
     /// @brief Invisible horizontal spacing widget for layout padding
@@ -8148,7 +8150,7 @@ namespace cpptui
                 width = w;
             }
         }
-        void render(Buffer &) override { }
+        void render(Buffer &) override {}
     };
 
     /// @brief Numeric input with optional stepper buttons
@@ -12177,7 +12179,7 @@ namespace cpptui
                 if (label_all_x_ticks && x_tick_count > 1 && draw_width > 20)
                 {
                     // Label all tick positions
-                    
+
                     for (int t = 0; t < x_tick_count; ++t)
                     {
                         int tick_x = draw_x + (draw_width - 1) * t / (x_tick_count - 1);
@@ -14734,8 +14736,8 @@ namespace cpptui
                 // the unclamped position are consumed as "near_divider" even though they're
                 // visually inside a child pane (causing dead zones where children don't receive events).
                 int div_pos = !vertical
-                    ? std::max(x + min_size1, std::min(x + width - min_size2 - 1, x + (int)(ratio * width)))
-                    : std::max(y + min_size1, std::min(y + height - min_size2 - 1, y + (int)(ratio * height)));
+                                  ? std::max(x + min_size1, std::min(x + width - min_size2 - 1, x + (int)(ratio * width)))
+                                  : std::max(y + min_size1, std::min(y + height - min_size2 - 1, y + (int)(ratio * height)));
                 int mouse_pos = !vertical ? event.x : event.y;
                 int other_pos = !vertical ? event.y : event.x;
                 int other_start = !vertical ? y : x;
@@ -19511,4 +19513,3 @@ namespace cpptui
     };
 
 } // namespace cpptui
-
