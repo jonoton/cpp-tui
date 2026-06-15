@@ -14747,7 +14747,7 @@ namespace cpptui
 
                 // Check if mouse is within bounds of the splitpane
                 bool in_bounds = other_pos >= other_start && other_pos < other_end;
-                bool near_divider = std::abs(mouse_pos - div_pos) <= 1;
+                bool near_divider = mouse_pos == div_pos;
 
                 if (event.mouse_left() && near_divider && in_bounds)
                 {
