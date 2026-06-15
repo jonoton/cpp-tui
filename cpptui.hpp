@@ -4183,7 +4183,7 @@ namespace cpptui
                         {
                             result.push_back(current_line);
                             /* Strip trailing whitespace when wrapping to avoid lines ending with spaces */
-                            current_line = w;
+                            current_line = w + ws;
                             current_width = other_width;
                         }
                     }
@@ -7800,6 +7800,10 @@ namespace cpptui
 
         bool on_event(const Event &event) override
         {
+            // Ensure non-mouse events (like keyboard navigation/typing) are still delegated
+            if (!event.is_mouse_event() && Container::on_event(event))
+                return true;
+
             // For mouse click/release/drag/motion events, first check whether the cursor is actually
             // inside this container's bounds. If not, let sibling panes handle it.
             if ((event.mouse_left() || event.mouse_release() || event.mouse_drag() || event.mouse_motion()) &&
@@ -10936,7 +10940,6 @@ namespace cpptui
                 bool is_sel = (i == (size_t)selected_index);
 
                 std::string prefix = is_sel ? selection_indicator : std::string(utf8_display_width(selection_indicator), ' ');
-                (void)utf8_display_width(prefix);
                 int content_width = width - 4;
 
                 Color n_fg = normal_fg.resolve(Theme::current().foreground);
