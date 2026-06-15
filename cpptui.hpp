@@ -3054,7 +3054,7 @@ namespace cpptui
         /// @brief Handle an input event
         /// @param event The event to process
         /// @return true if the event was consumed, false otherwise
-        virtual bool on_event(const Event &event) { (void)event; return false; }
+        virtual bool on_event(const Event &) { return false; }
 
         // Focus management
         bool focusable = false; ///< If true, can receive focus (via click or tab)
@@ -8133,7 +8133,7 @@ namespace cpptui
                 height = h;
             }
         }
-        void render(Buffer &buffer) override { (void)buffer; }
+        void render(Buffer &) override { }
     };
 
     /// @brief Invisible horizontal spacing widget for layout padding
@@ -8148,7 +8148,7 @@ namespace cpptui
                 width = w;
             }
         }
-        void render(Buffer &buffer) override { (void)buffer; }
+        void render(Buffer &) override { }
     };
 
     /// @brief Numeric input with optional stepper buttons
@@ -12177,7 +12177,7 @@ namespace cpptui
                 if (label_all_x_ticks && x_tick_count > 1 && draw_width > 20)
                 {
                     // Label all tick positions
-                    (void)(draw_width / x_tick_count);
+                    
                     for (int t = 0; t < x_tick_count; ++t)
                     {
                         int tick_x = draw_x + (draw_width - 1) * t / (x_tick_count - 1);
@@ -12246,11 +12246,10 @@ namespace cpptui
             if (draw_height <= 0 || draw_width <= 0)
                 return;
 
-            bool needs_braille = false;
+            [[maybe_unused]] bool needs_braille = false;
             for (const auto &s : series)
                 if (s.style == LineStyle::Braille)
                     needs_braille = true;
-            (void)needs_braille;
 
             for (int s_idx = 0; s_idx < (int)series.size(); ++s_idx)
             {
@@ -13086,9 +13085,7 @@ namespace cpptui
             int draw_x = x;
             int draw_y = y;
             int draw_width = width;
-            int draw_height = height;
-            (void)draw_y;
-            (void)draw_height;
+            [[maybe_unused]] int draw_height = height;
 
             // Y-Axis Labels & Margins
             int y_label_width = 6;
@@ -14184,7 +14181,6 @@ namespace cpptui
 
         void render(Buffer &buffer) override
         {
-            (void)bg_color.resolve(Theme::current().background);
             Color h_bg = header_bg.resolve(Theme::current().panel_bg);
             Color h_fg = header_fg.resolve(Theme::current().foreground);
 
@@ -16661,7 +16657,6 @@ namespace cpptui
             }
             Color r_a = row_color_a.resolve(Theme::current().background);
             Color r_b = row_color_b.resolve(Theme::current().panel_bg);
-            (void)border_color.resolve(Theme::current().border);
 
             int current_x_offset = x;
 
@@ -17441,7 +17436,7 @@ namespace cpptui
 #else
             if (g_wakeup_pipe[1] != -1)
             {
-                char c = 1;
+                [[maybe_unused]] char c = 1;
                 // Write is non-blocking; ignore failure (pipe full means wakeup is already pending)
                 (void)write(g_wakeup_pipe[1], &c, 1);
             }
