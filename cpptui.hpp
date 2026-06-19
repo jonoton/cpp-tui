@@ -34,7 +34,7 @@ namespace cpptui {
 
 constexpr int VERSION_MAJOR = 1;
 constexpr int VERSION_MINOR = 7;
-constexpr int VERSION_PATCH = 1;
+constexpr int VERSION_PATCH = 2;
 
 inline std::string version() {
   return std::to_string(VERSION_MAJOR) + "." + std::to_string(VERSION_MINOR) +
@@ -16314,6 +16314,8 @@ class SearchInput : public Container {
 
   SearchInput(App *app = nullptr) : app_(app) {
     focusable = true;
+    height = 1;
+    fixed_height = 1;
     input_ = std::make_shared<Input>();
     input_->placeholder = placeholder;
     input_->focusable =
