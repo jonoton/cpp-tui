@@ -66,7 +66,7 @@ app.update();                 // Immediately wakes the event loop to redraw
 
 Every visual element in cpp-tui inherits from the `Widget` class. Widgets have:
 - **Geometry**: `x`, `y`, `width`, `height`.
-- **Sizing Policy**: `fixed_width`, `fixed_height` (0 or negative means flexible).
+- **Sizing Policy**: `fixed_width`, `fixed_height` (0 or negative means flexible) and size constraints: `min_width`, `max_width`, `min_height`, `max_height`.
 - **Rendering**: `render(Buffer& buffer)` method to draw to the screen.
 - **Visibility**: `visible` property to show/hide.
 - **Responsive Width**: `set_responsive(sm, md, lg)` or `set_responsive_width(sm, md, lg)` to auto-toggle based on screen width.
@@ -78,6 +78,22 @@ Every visual element in cpp-tui inherits from the `Widget` class. Widgets have:
 - **Tooltips**:
   - `set_tooltip(text)`: Quickly attach a text tooltip.
   - `set_tooltip(std::shared_ptr<Tooltip>)`: Attach a custom or shared `Tooltip` instance.
+
+### Layouts & Sizing Flow
+
+Widgets in `cpp-tui` participate in a two-phase layout negotiation:
+
+1. **Responsive and Size Constraint Resolution (`update_responsive()`)**:
+   - Containers and widgets compute their size requests before layout.
+   - If a container has `auto_shrink = true`, it recursively calculates its fixed size (`fixed_width`/`fixed_height`) based on the sum or maximum of its children's fixed sizes plus container padding.
+   - During auto-shrink size calculation, constraints are propagated: the computed size is clamped using the container's own `min_width`/`min_height` and `max_width`/`max_height`.
+   - If `auto_shrink = false` (the default), the container behaves flexibly and expands to fill the available space allocated by its parent.
+
+2. **Actual Placement (`layout()`)**:
+   - The parent container allocates actual positions (`x`, `y`) and dimensions (`width`, `height`) to its children.
+   - **Flexible Space Distribution (Multi-Pass Clamping)**: In layouts like `Vertical`, `Horizontal`, `ScrollableVertical`, and `ScrollableHorizontal`, remaining available space is dynamically distributed among flexible children. This is calculated using a multi-pass algorithm: space is initially split evenly, then children that violate their `min_*` or `max_*` constraints are clamped and settled, and the remaining space is redistributed among the remaining unsettled flex children.
+   - **Precedence (Min Wins)**: In case of conflicting constraints (e.g. `min_width > max_width`), the `min` constraint overrides the `max` constraint (matching standard CSS behavior).
+   - **Explicit Size Preservation**: Containers respect child constraints; a child inside a container with an explicit fixed size will not be stretched to fill the container's entire area. Additionally, a child's cross-axis size is always clamped using its `min` and `max` constraints.
 
 ### Theme
 

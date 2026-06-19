@@ -160,6 +160,10 @@ All widgets inherit from the base `Widget` class and share these common properti
 | `width` / `height` | `int` | Current dimensions (read-only for most widgets) |
 | `fixed_width` | `int` | `0` = flexible, `> 0` = fixed width request |
 | `fixed_height` | `int` | `0` = flexible, `> 0` = fixed height request |
+| `min_width` | `int` | `0` = no minimum, `> 0` = minimum width constraint |
+| `min_height` | `int` | `0` = no minimum, `> 0` = minimum height constraint |
+| `max_width` | `int` | `0` = no maximum, `> 0` = maximum width constraint |
+| `max_height` | `int` | `0` = no maximum, `> 0` = maximum height constraint |
 | `fg_color` | `Color` | Foreground color override |
 | `bg_color` | `Color` | Background color override |
 | `focusable` | `bool` | Whether the widget can receive keyboard/mouse focus |
@@ -194,7 +198,8 @@ row->add(std::make_shared<Label>("Col B"));
 
 | Property | Description |
 |----------|-------------|
-| `fixed_width` / `fixed_height` | Set to `> 0` for fixed size; `<= 0` for flexible (fills available space) |
+| `fixed_width` / `fixed_height` | Set to `> 0` for fixed size; `<= 0` for flexible. Flexible children automatically receive equal shares of the remaining space. |
+| `min_width` / `max_width` / `min_height` / `max_height` | Constraints applied during flexible space distribution (multi-pass clamping) and cross-axis alignment. |
 
 <p class="back-to-top"><a href="#api-reference">↑ Back to top</a></p>
 
@@ -273,11 +278,15 @@ All visible children are resized to fill the stack (unless fixed size is set).
 
 A vertical layout that scrolls if content exceeds its height. Content is clipped to the container's bounds.
 
+- **Sizing**: Children without an explicit `fixed_height` are treated as flexible and will share the visible height of the container equally (instead of defaulting to a height of 1).
+
 ---
 
 #### `ScrollableHorizontal`
 
 A horizontal layout that scrolls if content exceeds its width. Supports a horizontal scrollbar.
+
+- **Sizing**: Children without an explicit `fixed_width` are treated as flexible and will share the visible width of the container equally.
 
 ---
 
@@ -299,9 +308,14 @@ Bi-directional scrollable container for panning over large 2D content.
 ### Containers
 {: .api-section-header}
 
-All container widgets inherit from `Container` and support:
-- `add(widget)` — Add a child widget
-- `clear_children()` — Remove all children
+All container widgets inherit from the base `Container` class, which provides children management and size propagation features.
+
+| Property / Method | Type | Description |
+|-------------------|------|-------------|
+| `add(widget)` | method | Add a child widget to the container |
+| `clear_children()` | method | Remove all child widgets |
+| `get_children()` | method | Returns a list of shared pointers to the children |
+| `auto_shrink` | `bool` | If `true`, the container automatically calculates and shrinks its requested `fixed_width`/`fixed_height` to wrap its children's constraints plus padding. Defaults to `false` (fills parent space). |
 
 ---
 

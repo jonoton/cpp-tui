@@ -44,6 +44,10 @@ A lightweight, single-header C++ TUI (Text User Interface) library.
     - **Containers**: `Vertical`, `Horizontal`, `Grid`, and `Align`.
         - `VerticalSpacer(int height)`: Add fixed or flexible vertical space.
         - `HorizontalSpacer(int width)`: Add fixed or flexible horizontal space.
+        - **Dynamic Flex Allocation**: Layouts divide remaining available space among non-fixed widgets (supported in `Vertical`, `Horizontal`, `ScrollableVertical`, and `ScrollableHorizontal`), applying a multi-pass clamping algorithm to satisfy `min_*`/`max_*` constraints.
+        - **Min/Max Constraints**: Global `min_width`, `max_width`, `min_height`, and `max_height` properties are respected by layout containers during space negotiation and cross-axis alignment, with `min` overriding `max` (min-wins precedence).
+        - **Auto-Shrink**: Containers can automatically shrink to wrap their children's size constraints via the `auto_shrink` property, propagating constraints recursively while respecting the container's own min/max limits.
+        - **Explicit Sizing Preservation**: Container widgets (like `Border`) respect child fixed width/height constraints and avoid stretching them.
     - **Visibility & Responsive**:
         - Global `.visible` property on all widgets.
         - **Responsive**: Auto-hide/show based on terminal width (`set_responsive()`).

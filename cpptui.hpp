@@ -33,8 +33,8 @@
 namespace cpptui {
 
 constexpr int VERSION_MAJOR = 1;
-constexpr int VERSION_MINOR = 6;
-constexpr int VERSION_PATCH = 2;
+constexpr int VERSION_MINOR = 7;
+constexpr int VERSION_PATCH = 0;
 
 inline std::string version() {
   return std::to_string(VERSION_MAJOR) + "." + std::to_string(VERSION_MINOR) +
@@ -2679,7 +2679,24 @@ class Widget : public std::enable_shared_from_this<Widget> {
   int width = 0;        ///< Current width
   int height = 0;       ///< Current height
   int fixed_width = 0;  ///< 0 = flexible, >0 = fixed size request
-  int fixed_height = 0;      ///< 0 = flexible, >0 = fixed size request
+  int fixed_height = 0;  ///< 0 = flexible, >0 = fixed size request
+  int min_width = 0;     ///< 0 = no minimum, >0 = minimum width constraint
+  int min_height = 0;    ///< 0 = no minimum, >0 = minimum height constraint
+  int max_width = 0;     ///< 0 = no maximum, >0 = maximum width constraint
+  int max_height = 0;    ///< 0 = no maximum, >0 = maximum height constraint
+
+  /// @brief Clamp a size value by min/max constraints.
+  /// When min > max, min wins (CSS convention).
+  /// @param size The computed size to clamp
+  /// @param min_val Minimum constraint (0 = unconstrained)
+  /// @param max_val Maximum constraint (0 = unconstrained)
+  /// @return The clamped size
+  static int clamp_size(int size, int min_val, int max_val) {
+    if (max_val > 0 && size > max_val) size = max_val;
+    if (min_val > 0 && size < min_val) size = min_val;  // min wins over max
+    return size;
+  }
+
   Color bg_color = Color();  ///< Background color override
   Color fg_color = Color();  ///< Foreground color override
 
@@ -6359,6 +6376,10 @@ class TextArea : public Widget {
 
 class Container : public Widget {
  public:
+  bool auto_shrink =
+      false;  ///< If true, container shrinks to fit its children's constraints;
+              ///< if false, grows to fill parent
+
   /// @brief Add a child widget to the container
   /// @param widget The widget to add
   void add(std::shared_ptr<Widget> widget) { children_.push_back(widget); }
@@ -6398,8 +6419,215 @@ class Container : public Widget {
     return children_;
   }
 
+  void update_responsive() override {
+    Widget::update_responsive();
+
+    int max_child_fixed_height = 0;
+    int sum_child_fixed_height = 0;
+    int max_child_fixed_width = 0;
+    int sum_child_fixed_width = 0;
+
+    for (const auto &child : children_) {
+      if (child && child->visible) {
+        child->update_responsive();
+        if (child->fixed_height > 0) {
+          sum_child_fixed_height += child->fixed_height;
+          if (child->fixed_height > max_child_fixed_height) {
+            max_child_fixed_height = child->fixed_height;
+          }
+        }
+        if (child->fixed_width > 0) {
+          sum_child_fixed_width += child->fixed_width;
+          if (child->fixed_width > max_child_fixed_width) {
+            max_child_fixed_width = child->fixed_width;
+          }
+        }
+      }
+    }
+
+    int target_height = get_child_fixed_height_contribution(
+        max_child_fixed_height, sum_child_fixed_height);
+    int target_width = get_child_fixed_width_contribution(
+        max_child_fixed_width, sum_child_fixed_width);
+
+    int pad_h = get_container_padding_height();
+    int pad_w = get_container_padding_width();
+
+    if (auto_shrink) {
+      propagate_axis(target_height, pad_h, fixed_height,
+                     last_propagated_child_height, fixed_height_is_propagated,
+                     min_height, max_height);
+      propagate_axis(target_width, pad_w, fixed_width,
+                     last_propagated_child_width, fixed_width_is_propagated,
+                     min_width, max_width);
+    } else {
+      revert_axis(pad_h, fixed_height, last_propagated_child_height,
+                  fixed_height_is_propagated, min_height, max_height);
+      revert_axis(pad_w, fixed_width, last_propagated_child_width,
+                  fixed_width_is_propagated, min_width, max_width);
+    }
+  }
+
  protected:
   std::vector<std::shared_ptr<Widget>> children_;
+
+  int last_propagated_child_height = 0;
+  int last_propagated_child_width = 0;
+  bool fixed_height_is_propagated = false;
+  bool fixed_width_is_propagated = false;
+
+  /// @brief Propagate a child's aggregate fixed size to this container's
+  /// fixed size on one axis. Detects external modifications to avoid
+  /// overwriting user-set values. Clamps the result by the container's own
+  /// min/max constraints.
+  /// @param target The aggregate child fixed size contribution
+  /// @param pad The container padding for this axis
+  /// @param fixed The container's fixed size (modified in place)
+  /// @param last_propagated Tracks the last propagated child value
+  /// @param is_propagated Whether the current fixed value was auto-propagated
+  /// @param min_val The container's minimum constraint for this axis
+  /// @param max_val The container's maximum constraint for this axis
+  static void propagate_axis(int target, int pad, int &fixed,
+                             int &last_propagated, bool &is_propagated,
+                             int min_val, int max_val) {
+    // Detect external modification: if fixed was propagated but has since
+    // been changed by user code, stop treating it as auto-propagated
+    if (is_propagated &&
+        fixed != clamp_size(last_propagated + pad, min_val, max_val)) {
+      is_propagated = false;
+    }
+
+    // Only propagate if no user-set value exists
+    if (fixed == 0 || is_propagated) {
+      if (target > 0) {
+        fixed = clamp_size(target + pad, min_val, max_val);
+        last_propagated = target;
+        is_propagated = true;
+      } else {
+        fixed = 0;
+        last_propagated = 0;
+        is_propagated = false;
+      }
+    }
+  }
+
+  /// @brief Revert a previously propagated fixed size when auto_shrink is
+  /// disabled. Only clears the value if it hasn't been externally modified.
+  static void revert_axis(int pad, int &fixed, int &last_propagated,
+                          bool &is_propagated, int min_val, int max_val) {
+    if (is_propagated) {
+      if (fixed == clamp_size(last_propagated + pad, min_val, max_val)) {
+        fixed = 0;
+        last_propagated = 0;
+      }
+      is_propagated = false;
+    }
+  }
+
+  virtual int get_child_fixed_height_contribution(int max_h, int sum_h) const {
+    return max_h;
+  }
+  virtual int get_child_fixed_width_contribution(int max_w, int sum_w) const {
+    return max_w;
+  }
+  virtual int get_container_padding_height() const { return 0; }
+  virtual int get_container_padding_width() const { return 0; }
+
+  /// @brief Distribute available space among flex children with min/max
+  /// constraints. Uses a multi-pass algorithm: distribute evenly, clamp
+  /// children that violate constraints, reclaim the difference, and
+  /// redistribute to unclamped children until stable.
+  /// @param children The children to distribute among
+  /// @param available Total available space for flex children
+  /// @param use_height If true, uses height constraints; if false, width
+  /// @param out_sizes Output: computed size for each child (indexed by
+  ///                  position in children vector). Fixed children get their
+  ///                  fixed size; invisible children get 0.
+  static void distribute_flex(
+      const std::vector<std::shared_ptr<Widget>> &children, int available,
+      bool use_height, std::vector<int> &out_sizes) {
+    int n = (int)children.size();
+    out_sizes.resize(n, 0);
+
+    if (available < 0) available = 0;
+
+    // Identify flex children and compute initial available space
+    std::vector<bool> is_flex(n, false);
+    std::vector<bool> settled(n, false);
+    int flex_count = 0;
+    int remaining = available;
+
+    for (int i = 0; i < n; ++i) {
+      const auto &child = children[i];
+      if (!child || !child->visible) {
+        settled[i] = true;
+        continue;
+      }
+      int fixed = use_height ? child->fixed_height : child->fixed_width;
+      if (fixed > 0) {
+        out_sizes[i] = fixed;
+        remaining -= fixed;
+        settled[i] = true;
+      } else {
+        is_flex[i] = true;
+        flex_count++;
+      }
+    }
+
+    if (remaining < 0) remaining = 0;
+
+    // Multi-pass distribution with clamping
+    // Each pass distributes remaining space evenly among unsettled flex
+    // children, then clamps any that violate min/max. If any were clamped,
+    // we reclaim the difference and repeat with fewer flex children.
+    bool changed = true;
+    while (changed && flex_count > 0) {
+      changed = false;
+      int share = remaining / flex_count;
+      int rem = remaining % flex_count;
+
+      for (int i = 0; i < n; ++i) {
+        if (!is_flex[i] || settled[i]) continue;
+
+        int size = share;
+        if (rem > 0) {
+          size++;
+          rem--;
+        }
+
+        int min_val =
+            use_height ? children[i]->min_height : children[i]->min_width;
+        int max_val =
+            use_height ? children[i]->max_height : children[i]->max_width;
+        int clamped = clamp_size(size, min_val, max_val);
+
+        if (clamped != size) {
+          // This child was constrained — settle it and reclaim the difference
+          out_sizes[i] = clamped;
+          remaining -= clamped;
+          settled[i] = true;
+          flex_count--;
+          changed = true;
+          break;
+        }
+      }
+    }
+
+    // Final pass: assign remaining space to unsettled flex children
+    if (flex_count > 0) {
+      int share = remaining / flex_count;
+      int rem = remaining % flex_count;
+      for (int i = 0; i < n; ++i) {
+        if (!is_flex[i] || settled[i]) continue;
+        int size = share;
+        if (rem > 0) {
+          size++;
+          rem--;
+        }
+        out_sizes[i] = size;
+      }
+    }
+  }
 };
 
 /// @brief Overlays children on top of each other
@@ -6410,8 +6638,14 @@ class Stack : public Container {
       if (!child->visible) continue;
       child->x = x;
       child->y = y;
-      child->width = child->fixed_width > 0 ? child->fixed_width : width;
-      child->height = child->fixed_height > 0 ? child->fixed_height : height;
+      child->width =
+          child->fixed_width > 0
+              ? child->fixed_width
+              : clamp_size(width, child->min_width, child->max_width);
+      child->height =
+          child->fixed_height > 0
+              ? child->fixed_height
+              : clamp_size(height, child->min_height, child->max_height);
 
       if (auto cont = std::dynamic_pointer_cast<Container>(child))
         cont->layout();
@@ -6426,30 +6660,14 @@ class Vertical : public Container {
   void layout() override {
     if (children_.empty()) return;
 
-    int available_height = height;
-    int flex_children = 0;
-
-    // First pass: Calculate available space after fixed children
+    // Update responsive state for all children
     for (auto &child : children_) {
       child->update_responsive();
-      if (!child->visible) continue;
-
-      if (child->fixed_height > 0) {
-        available_height -= child->fixed_height;
-      } else {
-        flex_children++;
-      }
     }
 
-    // prevent negative size
-    if (available_height < 0) available_height = 0;
-
-    int flex_height = 0;
-    int remainder = 0;
-    if (flex_children > 0) {
-      flex_height = available_height / flex_children;
-      remainder = available_height % flex_children;
-    }
+    // Distribute height among children with min/max clamping
+    std::vector<int> sizes;
+    distribute_flex(children_, height, true, sizes);
 
     int current_y = y;
 
@@ -6459,18 +6677,12 @@ class Vertical : public Container {
 
       child->x = x;
       child->y = current_y;
-      child->width = child->fixed_width > 0 ? child->fixed_width : width;
-
-      if (child->fixed_height > 0) {
-        child->height = child->fixed_height;
-      } else {
-        int h = flex_height;
-        if (flex_children > 0 && remainder > 0) {  // Distribute remainder
-          h++;
-          remainder--;
-        }
-        child->height = h;
-      }
+      // Cross-axis: clamp width by child's min/max
+      child->width =
+          child->fixed_width > 0
+              ? child->fixed_width
+              : clamp_size(width, child->min_width, child->max_width);
+      child->height = sizes[i];
 
       // Clipping: Ensure child does not overflow parent
       if (current_y >= y + height) {
@@ -6486,6 +6698,11 @@ class Vertical : public Container {
       }
     }
   }
+
+ protected:
+  int get_child_fixed_height_contribution(int max_h, int sum_h) const override {
+    return sum_h;
+  }
 };
 
 /// @brief Layouts children horizontally
@@ -6495,29 +6712,14 @@ class Horizontal : public Container {
   void layout() override {
     if (children_.empty()) return;
 
-    int available_width = width;
-    int flex_children = 0;
-
-    // First pass: Calculate available space after fixed children
+    // Update responsive state for all children
     for (auto &child : children_) {
       child->update_responsive();
-      if (!child->visible) continue;
-
-      if (child->fixed_width > 0) {
-        available_width -= child->fixed_width;
-      } else {
-        flex_children++;
-      }
     }
 
-    if (available_width < 0) available_width = 0;
-
-    int flex_width = 0;
-    int remainder = 0;
-    if (flex_children > 0) {
-      flex_width = available_width / flex_children;
-      remainder = available_width % flex_children;
-    }
+    // Distribute width among children with min/max clamping
+    std::vector<int> sizes;
+    distribute_flex(children_, width, false, sizes);
 
     int current_x = x;
 
@@ -6527,18 +6729,12 @@ class Horizontal : public Container {
 
       child->x = current_x;
       child->y = y;
-      child->height = child->fixed_height > 0 ? child->fixed_height : height;
-
-      if (child->fixed_width > 0) {
-        child->width = child->fixed_width;
-      } else {
-        int w = flex_width;
-        if (flex_children > 0 && remainder > 0) {
-          w++;
-          remainder--;
-        }
-        child->width = w;
-      }
+      // Cross-axis: clamp height by child's min/max
+      child->height =
+          child->fixed_height > 0
+              ? child->fixed_height
+              : clamp_size(height, child->min_height, child->max_height);
+      child->width = sizes[i];
 
       current_x += child->width;
 
@@ -6547,6 +6743,11 @@ class Horizontal : public Container {
         cont->layout();
       }
     }
+  }
+
+ protected:
+  int get_child_fixed_width_contribution(int max_w, int sum_w) const override {
+    return sum_w;
   }
 };
 
@@ -6577,13 +6778,19 @@ class ScrollableVertical : public Container {
   void layout() override {
     if (children_.empty()) return;
 
-    // 1. Calculate Content Height First
-    content_height = 0;
+    // Update responsive state for all children
     for (auto &child : children_) {
       child->update_responsive();
-      if (!child->visible) continue;
-      int intended_height = (child->fixed_height > 0) ? child->fixed_height : 1;
-      content_height += intended_height;
+    }
+
+    // 1. Calculate Content Height using distribute_flex
+    std::vector<int> sizes;
+    distribute_flex(children_, height, true, sizes);
+
+    content_height = 0;
+    for (size_t i = 0; i < children_.size(); ++i) {
+      if (!children_[i] || !children_[i]->visible) continue;
+      content_height += sizes[i];
     }
 
     // 2. Check if Scrollbar Needed
@@ -6601,20 +6808,21 @@ class ScrollableVertical : public Container {
     // 3. Layout Children with Effective Width
     int current_y = y - scroll_offset;
 
-    for (auto &child : children_) {
+    for (size_t i = 0; i < children_.size(); ++i) {
+      auto &child = children_[i];
       if (!child->visible) continue;
 
       child->x = x;
       child->y = current_y;
+      // Cross-axis: clamp width by child's min/max
       child->width =
-          child->fixed_width > 0 ? child->fixed_width : effective_width;
-
-      // Keep intended height, do NOT clip by changing height
-      int intended_height = (child->fixed_height > 0) ? child->fixed_height : 1;
-      child->height = intended_height;
+          child->fixed_width > 0
+              ? child->fixed_width
+              : clamp_size(effective_width, child->min_width, child->max_width);
+      child->height = sizes[i];
 
       // Advance using INTENDED height
-      current_y += intended_height;
+      current_y += sizes[i];
 
       if (auto cont = std::dynamic_pointer_cast<Container>(child)) {
         cont->layout();
@@ -6731,6 +6939,11 @@ class ScrollableVertical : public Container {
   Color scrollbar_thumb_color = Color();        // Default
   std::string scrollbar_track_char = "\u2591";  // Unicode Light Shade
   std::string scrollbar_thumb_char = "\u2588";  // Unicode Full Block
+
+ protected:
+  int get_child_fixed_height_contribution(int max_h, int sum_h) const override {
+    return sum_h;
+  }
 };
 
 /// @brief A horizontal layout that scrolls if content exceeds width
@@ -6751,13 +6964,19 @@ class ScrollableHorizontal : public Horizontal {
   void layout() override {
     if (children_.empty()) return;
 
-    // 1. Calculate Content Width First
-    content_width = 0;
+    // Update responsive state for all children
     for (auto &child : children_) {
       child->update_responsive();
-      if (!child->visible) continue;
-      int intended_width = (child->fixed_width > 0) ? child->fixed_width : 1;
-      content_width += intended_width;
+    }
+
+    // 1. Calculate Content Width using distribute_flex
+    std::vector<int> sizes;
+    distribute_flex(children_, width, false, sizes);
+
+    content_width = 0;
+    for (size_t i = 0; i < children_.size(); ++i) {
+      if (!children_[i] || !children_[i]->visible) continue;
+      content_width += sizes[i];
     }
 
     // 2. Check if Scrollbar Needed
@@ -6775,18 +6994,20 @@ class ScrollableHorizontal : public Horizontal {
     // 3. Layout Children with Effective Height
     int current_x = x - scroll_offset;
 
-    for (auto &child : children_) {
+    for (size_t i = 0; i < children_.size(); ++i) {
+      auto &child = children_[i];
       if (!child->visible) continue;
 
       child->x = current_x;
       child->y = y;
-      child->height =
-          child->fixed_height > 0 ? child->fixed_height : effective_height;
+      // Cross-axis: clamp height by child's min/max
+      child->height = child->fixed_height > 0
+                          ? child->fixed_height
+                          : clamp_size(effective_height, child->min_height,
+                                       child->max_height);
+      child->width = sizes[i];
 
-      int intended_width = (child->fixed_width > 0) ? child->fixed_width : 1;
-      child->width = intended_width;
-
-      current_x += intended_width;
+      current_x += sizes[i];
 
       if (auto cont = std::dynamic_pointer_cast<Container>(child)) {
         cont->layout();
@@ -8115,12 +8336,14 @@ class TreeView : public ScrollableVertical {
 
       child->x = x - (show_h_scroll ? scroll_x_ : 0);
       child->y = current_y;
-      child->width = final_child_width;
+      child->width =
+          clamp_size(final_child_width, child->min_width, child->max_width);
 
       int intended_height = (child->fixed_height > 0) ? child->fixed_height : 1;
-      child->height = intended_height;
+      child->height =
+          clamp_size(intended_height, child->min_height, child->max_height);
 
-      current_y += intended_height;
+      current_y += child->height;
     }
   }
 
@@ -8566,12 +8789,20 @@ class Border : public Container {
 
   void layout() override {
     // All children fill the area minus border
+    int inner_w = width > 2 ? width - 2 : 0;
+    int inner_h = height > 2 ? height - 2 : 0;
     for (auto &child : children_) {
       child->update_responsive();
       child->x = x + 1;
       child->y = y + 1;
-      child->width = width > 2 ? width - 2 : 0;
-      child->height = height > 2 ? height - 2 : 0;
+      child->width =
+          child->fixed_width > 0
+              ? std::min(child->fixed_width, inner_w)
+              : clamp_size(inner_w, child->min_width, child->max_width);
+      child->height =
+          child->fixed_height > 0
+              ? std::min(child->fixed_height, inner_h)
+              : clamp_size(inner_h, child->min_height, child->max_height);
 
       if (auto cont = std::dynamic_pointer_cast<Container>(child)) {
         cont->layout();
@@ -8788,9 +9019,10 @@ class Border : public Container {
   Alignment title_align_ = Alignment::Center;
 
   SelectionState selection_state_;
-};
 
-// --- New Layouts ---
+  int get_container_padding_height() const override { return 2; }
+  int get_container_padding_width() const override { return 2; }
+};
 
 /// @brief Aligns a single child within the available space
 class Align : public Container {
@@ -8811,15 +9043,17 @@ class Align : public Container {
     // Layout each child within the container
 
     for (auto &child : children_) {
-      // Determine child size.
-      // If child is fixed size, we align it.
-
-      int child_w = child->fixed_width > 0 ? child->fixed_width
-                                           : width;  // Fill if flexible
-      int child_h = child->fixed_height > 0 ? child->fixed_height
-                                            : height;  // Fill if flexible
-
       child->update_responsive();
+
+      // Determine child size.
+      // If child is fixed size, use it; otherwise fill and clamp.
+      int child_w = child->fixed_width > 0
+                        ? child->fixed_width
+                        : clamp_size(width, child->min_width, child->max_width);
+      int child_h =
+          child->fixed_height > 0
+              ? child->fixed_height
+              : clamp_size(height, child->min_height, child->max_height);
 
       int pos_x = x;
       int pos_y = y;
@@ -8966,8 +9200,10 @@ class Grid : public Container {
 
       item.widget->x = px;
       item.widget->y = py;
-      item.widget->width = pw;
-      item.widget->height = ph;
+      item.widget->width =
+          clamp_size(pw, item.widget->min_width, item.widget->max_width);
+      item.widget->height =
+          clamp_size(ph, item.widget->min_height, item.widget->max_height);
 
       if (auto cont = std::dynamic_pointer_cast<Container>(item.widget)) {
         cont->layout();
@@ -12366,13 +12602,20 @@ class SplitPane : public Container {
 
       pane1->x = x;
       pane1->y = y;
-      pane1->width = div_x - x;
-      pane1->height = pane1->fixed_height > 0 ? pane1->fixed_height : height;
+      pane1->width = clamp_size(div_x - x, pane1->min_width, pane1->max_width);
+      pane1->height =
+          pane1->fixed_height > 0
+              ? pane1->fixed_height
+              : clamp_size(height, pane1->min_height, pane1->max_height);
 
       pane2->x = div_x + 1;
       pane2->y = y;
-      pane2->width = x + width - div_x - 1;
-      pane2->height = pane2->fixed_height > 0 ? pane2->fixed_height : height;
+      pane2->width =
+          clamp_size(x + width - div_x - 1, pane2->min_width, pane2->max_width);
+      pane2->height =
+          pane2->fixed_height > 0
+              ? pane2->fixed_height
+              : clamp_size(height, pane2->min_height, pane2->max_height);
     } else {
       int div_y = y + (int)(ratio * height);
       div_y =
@@ -12380,13 +12623,21 @@ class SplitPane : public Container {
 
       pane1->x = x;
       pane1->y = y;
-      pane1->width = pane1->fixed_width > 0 ? pane1->fixed_width : width;
-      pane1->height = div_y - y;
+      pane1->width =
+          pane1->fixed_width > 0
+              ? pane1->fixed_width
+              : clamp_size(width, pane1->min_width, pane1->max_width);
+      pane1->height =
+          clamp_size(div_y - y, pane1->min_height, pane1->max_height);
 
       pane2->x = x;
       pane2->y = div_y + 1;
-      pane2->width = pane2->fixed_width > 0 ? pane2->fixed_width : width;
-      pane2->height = y + height - div_y - 1;
+      pane2->width =
+          pane2->fixed_width > 0
+              ? pane2->fixed_width
+              : clamp_size(width, pane2->min_width, pane2->max_width);
+      pane2->height = clamp_size(y + height - div_y - 1, pane2->min_height,
+                                 pane2->max_height);
     }
 
     if (auto c = std::dynamic_pointer_cast<Container>(pane1)) c->layout();
