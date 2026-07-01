@@ -25,6 +25,7 @@ int main() {
 
 - **Graceful Exit**: `App::quit()` can be called to exit the event loop and restore the terminal state.
 - **Exit Keys**: `register_exit_key(int key, bool ctrl=false, bool alt=false, bool shift=false)` adds a key that will trigger application exit.
+- **Key Bindings**: `register_key(int key, callback, bool ctrl=false, bool alt=false, bool shift=false, bool consume=true)` registers a global keyboard shortcut with optional modifiers. The callback fires before widget-level dispatch. Supports unregistration via `unregister_key()`. See `examples/key_events.cpp` for a working demo.
 - **Timers**:
   - `add_timer(interval_ms, callback)`: Schedule a repeating callback. Returns a `TimerId`.
   - `remove_timer(timer_id)`: Stop and remove a timer.
@@ -111,7 +112,7 @@ The `Theme` class manages the color palette of the application.
 ### Events
 
 Events are handled by the `App` and propagated to widgets.
-- **Key Events**: Pressing keys like `Enter`, `Esc`, `Tab`, or arrow keys.
+- **Key Events**: Pressing keys like `Enter`, `Esc`, `Tab`, or arrow keys. Global shortcuts can be registered with `register_key()` — these take priority over widget-level key handling.
 - **Mouse Events**: Clicks, drags, and scrolling.
 - **Focus**: `Tab` / `Shift+Tab` cycles focus between interactive widgets.
 - **Resize**: `g_resize_pending` signal handling for terminal resize events.

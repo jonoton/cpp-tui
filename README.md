@@ -15,7 +15,7 @@ A lightweight, single-header C++ TUI (Text User Interface) library.
     - **Semantic Colors**: Widgets use abstract names (`primary`, `background`, `error`) for automatic styling.
     - **Global Background**: Application window automatically fills with the theme's background color.
 - **Advanced Event System**:
-    - **Keyboard**: Full support for arrow keys, function keys, modifiers (Shift/Ctrl/Alt).
+    - **Keyboard**: Full support for arrow keys, function keys, modifiers (Shift/Ctrl/Alt). Global key bindings via `register_key()` with Ctrl/Alt/Shift modifier support — callbacks fire before widget-level dispatch.
     - **Focus Management**: Robust tab-key navigation (forward/reverse via Shift+Tab), click-to-focus support, and safe handling of nested/hidden widgets.
     - **Mouse**: Full tracking support including click, drag, scroll wheel, and hover.
     - **Resize**: Automatic layout updates on window resize (SIGWINCH).
@@ -81,6 +81,12 @@ This project uses **CMake**.
      ```bash
      ./chart_demo
      ```
+
+   - **Key Events Demo**:
+     ```bash
+     ./key_events
+     ```
+     - Demonstrates global keyboard shortcut registration with Ctrl/Alt/Shift modifiers.
 
 ## Quick Start
 

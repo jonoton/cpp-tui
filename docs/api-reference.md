@@ -102,6 +102,8 @@ app.run(root);
 | `run(root)` | Start the event loop with the given root widget |
 | `quit()` | Exit the event loop and restore the terminal (static) |
 | `register_exit_key(key, ctrl, alt, shift)` | Register a key that will exit the application |
+| `register_key(key, callback, ctrl, alt, shift, consume)` | Register a key combination that executes a callback |
+| `unregister_key(key, ctrl, alt, shift)` | Unregister a registered key combination |
 
 #### Timers
 
@@ -144,6 +146,37 @@ app.update();                  // Wakes the event loop to redraw
 | `open_dialog(dialog)` | Open a dialog, auto-centered on screen |
 | `open_dialog(dialog, x, y)` | Open a dialog at specific screen coordinates |
 | `close_dialog(dialog)` | Close a specific dialog |
+
+#### Key Event Registration
+
+Register global keyboard shortcuts with modifier support (Ctrl, Alt, Shift). Registered keys are evaluated before widget-level key dispatch, giving them priority over focused widgets.
+
+```cpp
+// register_key(key_code, callback, ctrl=false, alt=false, shift=false, consume=true)
+app.register_key('s', []() { save_file(); },
+                 /*ctrl=*/true, /*alt=*/false, /*shift=*/false);
+
+// Ctrl+Shift+P — command palette
+app.register_key('p', []() { open_palette(); },
+                 /*ctrl=*/true, /*alt=*/false, /*shift=*/true);
+
+// Alt+X — execute command without consuming event
+app.register_key('x', []() { run_command(); },
+                 /*ctrl=*/false, /*alt=*/true, /*shift=*/false,
+                 /*consume=*/false);
+
+// Unregister shortcut
+app.unregister_key('s', /*ctrl=*/true);
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `key` | `int` | Character code (e.g. `'s'`, `'S'`). Register both cases for caps-lock robustness. |
+| `callback` | `std::function<void()>` | Zero-argument callable invoked when the key combination is pressed |
+| `ctrl` | `bool` | Require Ctrl modifier (default `false`) |
+| `alt` | `bool` | Require Alt modifier (default `false`) |
+| `shift` | `bool` | Require Shift modifier (default `false`) |
+| `consume` | `bool` | If true, consumes the event so it does not propagate to widgets (default `true`) |
 
 <p class="back-to-top"><a href="#api-reference">↑ Back to top</a></p>
 

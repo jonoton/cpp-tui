@@ -28,13 +28,14 @@
 #include <regex>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace cpptui {
 
 constexpr int VERSION_MAJOR = 1;
-constexpr int VERSION_MINOR = 7;
-constexpr int VERSION_PATCH = 2;
+constexpr int VERSION_MINOR = 8;
+constexpr int VERSION_PATCH = 0;
 
 inline std::string version() {
   return std::to_string(VERSION_MAJOR) + "." + std::to_string(VERSION_MINOR) +
@@ -14946,13 +14947,46 @@ class App {
     bool ctrl;
     bool alt;
     bool shift;
+
+    bool operator==(const KeyBinding &other) const {
+      return key == other.key && ctrl == other.ctrl && alt == other.alt &&
+             shift == other.shift;
+    }
   };
+
+  struct KeyBindingHash {
+    std::size_t operator()(const KeyBinding &k) const noexcept {
+      return std::hash<std::size_t>{}((static_cast<std::size_t>(k.key) << 3) |
+                                      (static_cast<std::size_t>(k.ctrl) << 2) |
+                                      (static_cast<std::size_t>(k.alt) << 1) |
+                                      static_cast<std::size_t>(k.shift));
+    }
+  };
+
+  struct RegisteredKey {
+    std::function<void()> callback;
+    bool consume;
+  };
+
   std::vector<KeyBinding> exit_keys_;
+  std::unordered_map<KeyBinding, RegisteredKey, KeyBindingHash> key_events_;
 
   /// @brief Register a key that will exit the application
   void register_exit_key(int key, bool ctrl = false, bool alt = false,
                          bool shift = false) {
     exit_keys_.push_back({key, ctrl, alt, shift});
+  }
+
+  /// @brief Register a key that will execute a callback function
+  void register_key(int key, std::function<void()> callback, bool ctrl = false,
+                    bool alt = false, bool shift = false, bool consume = true) {
+    key_events_[{key, ctrl, alt, shift}] = {callback, consume};
+  }
+
+  /// @brief Unregister a registered key combination
+  void unregister_key(int key, bool ctrl = false, bool alt = false,
+                      bool shift = false) {
+    key_events_.erase({key, ctrl, alt, shift});
   }
 
   // Dialog Stack
@@ -15392,6 +15426,20 @@ class App {
           if (handled) {
             needs_render = true;
             continue;
+          }
+        }
+
+        // 1.7 Registered Key Events
+        if (event.is_key_event()) {
+          KeyBinding kv = {event.key, event.ctrl, event.alt, event.shift};
+          auto it = key_events_.find(kv);
+          if (it != key_events_.end()) {
+            it->second.callback();
+            if (it->second.consume) {
+              needs_render = true;
+              continue;  // Consumed, skip subsequent dispatch steps
+            }
+            needs_render = true;
           }
         }
 
