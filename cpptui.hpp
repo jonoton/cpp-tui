@@ -34,7 +34,7 @@
 namespace cpptui {
 
 constexpr int VERSION_MAJOR = 1;
-constexpr int VERSION_MINOR = 11;
+constexpr int VERSION_MINOR = 12;
 constexpr int VERSION_PATCH = 0;
 
 inline std::string version() {
@@ -10381,6 +10381,8 @@ class ChartBase : public Widget {
       legend_hits_;  ///< Screen locations of drawn legend items
   int hovered_series_idx_ =
       -1;  ///< Currently hovered legend item index (-1 if none)
+  std::unordered_map<std::string, bool>
+      series_visibility_;  ///< Persistent series visibility overrides
 
  protected:
   /// @brief Format a tick label value
@@ -10433,6 +10435,12 @@ class LineChart : public ChartBase {
     new_series.color = c;
     new_series.style = s;
     new_series.marker = m;
+    auto it = series_visibility_.find(l);
+    if (it != series_visibility_.end()) {
+      new_series.visible = it->second;
+    } else {
+      series_visibility_[l] = new_series.visible;
+    }
     series.push_back(new_series);
   }
 
@@ -10481,6 +10489,8 @@ class LineChart : public ChartBase {
                 event.y == hit.y) {
               series[hit.series_index].visible =
                   !series[hit.series_index].visible;
+              series_visibility_[series[hit.series_index].label] =
+                  series[hit.series_index].visible;
               requested_update = true;
               return true;  // Click handled
             }
@@ -10498,7 +10508,7 @@ class LineChart : public ChartBase {
     // 2. Handle Tooltips if enabled
     if (show_tooltip && event.is_mouse_event() && !event.mouse_wheel()) {
       bool hit_found = false;
-      if (contains(event.x, event.y)) {
+      if (contains(event.x, event.y) && hovered_series_idx_ == -1) {
         for (const auto &hit : point_hits_) {
           if (std::abs(event.x - hit.x) <= 1 &&
               std::abs(event.y - hit.y) <= 0) {
@@ -10525,7 +10535,10 @@ class LineChart : public ChartBase {
         }
       }
 
-      if (!hit_found && tooltip_) {
+      if (hovered_series_idx_ != -1 && tooltip_) {
+        tooltip_ = nullptr;
+        requested_update = true;
+      } else if (!hit_found && tooltip_) {
         if (tooltip_->contains(event.x, event.y)) {
           last_hit_time_ = std::chrono::steady_clock::now();
         } else {
@@ -10545,6 +10558,9 @@ class LineChart : public ChartBase {
   }
 
   void render(Buffer &buffer) override {
+    for (const auto &s : series) {
+      series_visibility_[s.label] = s.visible;
+    }
     if (show_tooltip) point_hits_.clear();  // Reset hits for this frame
 
     if (auto_scale && !series.empty()) {
@@ -11224,6 +11240,12 @@ class ScatterChart : public ChartBase {
     s.color = c;
     s.marker = m;
     s.use_braille = braille;
+    auto it = series_visibility_.find(l);
+    if (it != series_visibility_.end()) {
+      s.visible = it->second;
+    } else {
+      series_visibility_[l] = s.visible;
+    }
     series.push_back(s);
   }
 
@@ -11275,6 +11297,8 @@ class ScatterChart : public ChartBase {
                 event.y == hit.y) {
               series[hit.series_index].visible =
                   !series[hit.series_index].visible;
+              series_visibility_[series[hit.series_index].label] =
+                  series[hit.series_index].visible;
               requested_update = true;
               return true;  // Click handled
             }
@@ -11292,7 +11316,7 @@ class ScatterChart : public ChartBase {
     // 2. Handle Tooltips if enabled
     if (show_tooltip && event.is_mouse_event() && !event.mouse_wheel()) {
       bool hit_found = false;
-      if (contains(event.x, event.y)) {
+      if (contains(event.x, event.y) && hovered_series_idx_ == -1) {
         for (const auto &hit : point_hits_) {
           if (std::abs(event.x - hit.x) <= 1 &&
               std::abs(event.y - hit.y) <= 0) {
@@ -11320,7 +11344,10 @@ class ScatterChart : public ChartBase {
         }
       }
 
-      if (!hit_found && tooltip_) {
+      if (hovered_series_idx_ != -1 && tooltip_) {
+        tooltip_ = nullptr;
+        requested_update = true;
+      } else if (!hit_found && tooltip_) {
         if (tooltip_->contains(event.x, event.y)) {
           last_hit_time_ = std::chrono::steady_clock::now();
         } else {
@@ -11340,6 +11367,9 @@ class ScatterChart : public ChartBase {
   }
 
   void render(Buffer &buffer) override {
+    for (const auto &s : series) {
+      series_visibility_[s.label] = s.visible;
+    }
     if (show_tooltip) point_hits_.clear();
 
     if (auto_scale && !series.empty()) {
