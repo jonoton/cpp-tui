@@ -34,7 +34,7 @@
 namespace cpptui {
 
 constexpr int VERSION_MAJOR = 1;
-constexpr int VERSION_MINOR = 10;
+constexpr int VERSION_MINOR = 11;
 constexpr int VERSION_PATCH = 0;
 
 inline std::string version() {
@@ -10526,13 +10526,17 @@ class LineChart : public ChartBase {
       }
 
       if (!hit_found && tooltip_) {
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                           now - last_hit_time_)
-                           .count();
-        if (elapsed >= tooltip_duration_ms) {
-          tooltip_ = nullptr;
-          requested_update = true;
+        if (tooltip_->contains(event.x, event.y)) {
+          last_hit_time_ = std::chrono::steady_clock::now();
+        } else {
+          auto now = std::chrono::steady_clock::now();
+          auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             now - last_hit_time_)
+                             .count();
+          if (elapsed >= tooltip_duration_ms) {
+            tooltip_ = nullptr;
+            requested_update = true;
+          }
         }
       }
     }
@@ -11317,13 +11321,17 @@ class ScatterChart : public ChartBase {
       }
 
       if (!hit_found && tooltip_) {
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                           now - last_hit_time_)
-                           .count();
-        if (elapsed >= tooltip_duration_ms) {
-          tooltip_ = nullptr;
-          requested_update = true;
+        if (tooltip_->contains(event.x, event.y)) {
+          last_hit_time_ = std::chrono::steady_clock::now();
+        } else {
+          auto now = std::chrono::steady_clock::now();
+          auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             now - last_hit_time_)
+                             .count();
+          if (elapsed >= tooltip_duration_ms) {
+            tooltip_ = nullptr;
+            requested_update = true;
+          }
         }
       }
     }
@@ -11944,12 +11952,18 @@ class BarChart : public ChartBase {
 
       if (!hit_found) {
         if (tooltip_) {
-          auto now = std::chrono::steady_clock::now();
-          auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                             now - last_hit_time_)
-                             .count();
-          if (elapsed >= tooltip_duration_ms) {
-            tooltip_ = nullptr;
+          if (tooltip_->contains(event.x, event.y)) {
+            last_hit_time_ = std::chrono::steady_clock::now();
+          } else {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now - last_hit_time_)
+                    .count();
+            if (elapsed >= tooltip_duration_ms) {
+              tooltip_ = nullptr;
+              return true;  // Request redraw
+            }
           }
         }
       }
@@ -13631,12 +13645,18 @@ class Heatmap : public Widget {
 
       if (!hit_found) {
         if (tooltip_) {
-          auto now = std::chrono::steady_clock::now();
-          auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                             now - last_hit_time_)
-                             .count();
-          if (elapsed >= tooltip_duration_ms) {
-            tooltip_ = nullptr;
+          if (tooltip_->contains(event.x, event.y)) {
+            last_hit_time_ = std::chrono::steady_clock::now();
+          } else {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now - last_hit_time_)
+                    .count();
+            if (elapsed >= tooltip_duration_ms) {
+              tooltip_ = nullptr;
+              return true;  // Request redraw
+            }
           }
         }
       }
