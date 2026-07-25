@@ -67,6 +67,8 @@ nav_order: 4
 <li><a href="#barchart">BarChart</a></li>
 <li><a href="#gauge">Gauge</a></li>
 <li><a href="#proportionalbar">ProportionalBar</a></li>
+<li><a href="#piechart">PieChart</a></li>
+<li><a href="#boxwhiskerplot">BoxWhiskerPlot</a></li>
 <li><a href="#heatmap">Heatmap</a></li>
 
 <li class="toc-category">Navigation &amp; Utility</li>
@@ -1130,6 +1132,8 @@ chart->show_tooltip = true;
 | `visible` | `bool` | Series visibility control (default `true`) |
 
 **Styles:** `LineStyle::Points`, `LineStyle::Lines`, `LineStyle::Braille`
+
+**Features:** Interactive Legend (hover to highlight/dim other series, click to toggle visibility) · Subpixel color overlaps (shared Braille canvas resolves dominant series color per character cell) · Smooth subpixel vector line drawing using Bresenham's algorithm
 
 <p class="back-to-top"><a href="#api-reference">↑ Back to top</a></p>
 

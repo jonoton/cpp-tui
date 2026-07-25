@@ -34,7 +34,7 @@
 namespace cpptui {
 
 constexpr int VERSION_MAJOR = 1;
-constexpr int VERSION_MINOR = 9;
+constexpr int VERSION_MINOR = 10;
 constexpr int VERSION_PATCH = 0;
 
 inline std::string version() {
@@ -1857,9 +1857,10 @@ class Terminal {
                 ENABLE_PROCESSED_INPUT | ENABLE_VIRTUAL_TERMINAL_INPUT);
     dwMode |= ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT;
 
-    if (SetConsoleMode(hIn, dwMode | ENABLE_VIRTUAL_TERMINAL_INPUT)) {
+    if (SetConsoleMode(
+            hIn, dwMode | ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_MOUSE_INPUT)) {
       vt_input_supported_ = true;
-      dwMode |= ENABLE_VIRTUAL_TERMINAL_INPUT;
+      dwMode |= ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_MOUSE_INPUT;
     } else {
       // Fallback to legacy mouse input
       dwMode |= ENABLE_MOUSE_INPUT;
@@ -2183,18 +2184,19 @@ class Terminal {
     // VT Input Path - VT sequences arrive as KEY_EVENT records
     if (vt_input_supported_) {
       // Wait for input or wakeup event
-      if (timeout_ms >= 0) {
+      if (timeout_ms != 0) {
         DWORD waitRes;
+        DWORD timeout_val = (timeout_ms < 0) ? INFINITE : (DWORD)timeout_ms;
         if (g_wakeup_event) {
           HANDLE handles[2] = {hIn, g_wakeup_event};
-          waitRes = WaitForMultipleObjects(2, handles, FALSE, timeout_ms);
+          waitRes = WaitForMultipleObjects(2, handles, FALSE, timeout_val);
           if (waitRes == WAIT_OBJECT_0 + 1) {
             // Wakeup event signaled
             event.type = EventType::Wakeup;
             return event;
           }
         } else {
-          waitRes = WaitForSingleObject(hIn, timeout_ms);
+          waitRes = WaitForSingleObject(hIn, timeout_val);
         }
         if (waitRes == WAIT_TIMEOUT) return event;
       }
@@ -2227,6 +2229,41 @@ class Terminal {
                 if (ch != 0) {
                   event = parser_.process(ch);
                 }
+              } else if (ir[0].EventType == MOUSE_EVENT) {
+                event.type = EventType::Mouse;
+                event.x = ir[0].Event.MouseEvent.dwMousePosition.X;
+                event.y = ir[0].Event.MouseEvent.dwMousePosition.Y;
+
+                DWORD mods = ir[0].Event.MouseEvent.dwControlKeyState;
+                if (mods & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))
+                  event.ctrl = true;
+                if (mods & SHIFT_PRESSED) event.shift = true;
+                if (mods & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED))
+                  event.alt = true;
+
+                DWORD btn = ir[0].Event.MouseEvent.dwButtonState;
+                if (btn & FROM_LEFT_1ST_BUTTON_PRESSED)
+                  event.button = 0;
+                else if (btn & RIGHTMOST_BUTTON_PRESSED)
+                  event.button = 2;
+                else if (btn & FROM_LEFT_2ND_BUTTON_PRESSED)
+                  event.button = 1;
+                else
+                  event.button = 3;  // Release
+
+                if (ir[0].Event.MouseEvent.dwEventFlags == MOUSE_MOVED) {
+                  event.button |= 32;
+                } else if (ir[0].Event.MouseEvent.dwEventFlags ==
+                           MOUSE_WHEELED) {
+                  short delta =
+                      (short)((ir[0].Event.MouseEvent.dwButtonState >> 16) &
+                              0xFFFF);
+                  if (delta > 0)
+                    event.button = 64;
+                  else
+                    event.button = 65;
+                }
+                return event;
               } else if (ir[0].EventType == WINDOW_BUFFER_SIZE_EVENT) {
                 event.type = EventType::Resize;
                 event.x = ir[0].Event.WindowBufferSizeEvent.dwSize.X;
@@ -2299,6 +2336,38 @@ class Terminal {
               return event;
             }
           }
+        } else if (ir[0].EventType == MOUSE_EVENT) {
+          event.type = EventType::Mouse;
+          event.x = ir[0].Event.MouseEvent.dwMousePosition.X;
+          event.y = ir[0].Event.MouseEvent.dwMousePosition.Y;
+
+          DWORD mods = ir[0].Event.MouseEvent.dwControlKeyState;
+          if (mods & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))
+            event.ctrl = true;
+          if (mods & SHIFT_PRESSED) event.shift = true;
+          if (mods & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) event.alt = true;
+
+          DWORD btn = ir[0].Event.MouseEvent.dwButtonState;
+          if (btn & FROM_LEFT_1ST_BUTTON_PRESSED)
+            event.button = 0;
+          else if (btn & RIGHTMOST_BUTTON_PRESSED)
+            event.button = 2;
+          else if (btn & FROM_LEFT_2ND_BUTTON_PRESSED)
+            event.button = 1;
+          else
+            event.button = 3;  // Release
+
+          if (ir[0].Event.MouseEvent.dwEventFlags == MOUSE_MOVED) {
+            event.button |= 32;
+          } else if (ir[0].Event.MouseEvent.dwEventFlags == MOUSE_WHEELED) {
+            short delta =
+                (short)((ir[0].Event.MouseEvent.dwButtonState >> 16) & 0xFFFF);
+            if (delta > 0)
+              event.button = 64;
+            else
+              event.button = 65;
+          }
+          return event;
         } else if (ir[0].EventType == WINDOW_BUFFER_SIZE_EVENT) {
           event.type = EventType::Resize;
           event.x = ir[0].Event.WindowBufferSizeEvent.dwSize.X;
@@ -10834,10 +10903,11 @@ class LineChart : public ChartBase {
                              std::vector<int>(series.size(), 0));
     }
 
-    for (int s_idx = 0; s_idx < (int)series.size(); ++s_idx) {
+    auto render_series = [&](int s_idx, BrailleCanvas *target_bc,
+                             std::vector<std::vector<int>> *target_dot_counts) {
       const auto &s = series[s_idx];
-      if (s.data.empty()) continue;
-      if (!s.visible) continue;
+      if (s.data.empty()) return;
+      if (!s.visible) return;
 
       LineStyle effective_style = s.style;
       if (effective_style == LineStyle::Braille && !Terminal::has_utf8()) {
@@ -10849,7 +10919,7 @@ class LineChart : public ChartBase {
         draw_col = Theme::current().border;
       }
 
-      if (effective_style == LineStyle::Braille && shared_bc) {
+      if (effective_style == LineStyle::Braille && target_bc) {
         // Helper map
         auto map_y = [&](double v) -> int {
           double norm = (v - min_val) / (max_val - min_val);
@@ -10872,11 +10942,12 @@ class LineChart : public ChartBase {
         int prev_vy = -1;
 
         auto plot_dot = [&](int vx, int vy) {
-          shared_bc->set_dot(vx, vy);
+          target_bc->set_dot(vx, vy);
           int cx = vx / 2;
           int cy = vy / 4;
-          if (cx >= 0 && cx < draw_width && cy >= 0 && cy < draw_height) {
-            cell_dot_counts[cy * draw_width + cx][s_idx]++;
+          if (cx >= 0 && cx < draw_width && cy >= 0 && cy < draw_height &&
+              target_dot_counts) {
+            (*target_dot_counts)[cy * draw_width + cx][s_idx]++;
           }
         };
 
@@ -10904,7 +10975,7 @@ class LineChart : public ChartBase {
 
             // Connect dots using subpixel vector lines
             if (prev_vy != -1 && s.fill_gaps) {
-              shared_bc->draw_line(vx - 1, prev_vy, vx, vy, plot_dot);
+              target_bc->draw_line(vx - 1, prev_vy, vx, vy, plot_dot);
             } else {
               plot_dot(vx, vy);
             }
@@ -11011,9 +11082,15 @@ class LineChart : public ChartBase {
           prev_screen_y = screen_y;
         }
       }
+    };
+
+    // Pass 1: Render all background (non-hovered) series
+    for (int s_idx = 0; s_idx < (int)series.size(); ++s_idx) {
+      if (hovered_series_idx_ != -1 && s_idx == hovered_series_idx_) continue;
+      render_series(s_idx, shared_bc.get(), &cell_dot_counts);
     }
 
-    // Blit BrailleCanvas to Buffer if used
+    // Blit background BrailleCanvas to Buffer if used
     if (use_braille_shared && shared_bc) {
       for (int by = 0; by < draw_height; ++by) {
         for (int bx = 0; bx < draw_width; ++bx) {
@@ -11053,6 +11130,28 @@ class LineChart : public ChartBase {
               c.bg_color = bg;
               buffer.set(draw_x + bx, draw_y + by, c);
             }
+          }
+        }
+      }
+    }
+
+    // Pass 2: Render the foreground (hovered) series on top
+    if (hovered_series_idx_ != -1 && hovered_series_idx_ < (int)series.size()) {
+      auto hover_bc = std::make_unique<BrailleCanvas>(draw_width, draw_height);
+      std::vector<std::vector<int>> hover_dot_counts(
+          draw_width * draw_height, std::vector<int>(series.size(), 0));
+      render_series(hovered_series_idx_, hover_bc.get(), &hover_dot_counts);
+
+      // Blit foreground BrailleCanvas to Buffer if used
+      for (int by = 0; by < draw_height; ++by) {
+        for (int bx = 0; bx < draw_width; ++bx) {
+          std::string bchar = hover_bc->get_char(bx, by);
+          if (!bchar.empty() && bchar != " ") {
+            Cell c;
+            c.content = bchar;
+            c.fg_color = series[hovered_series_idx_].color;
+            c.bg_color = bg;
+            buffer.set(draw_x + bx, draw_y + by, c);
           }
         }
       }
@@ -11559,10 +11658,11 @@ class ScatterChart : public ChartBase {
                              std::vector<int>(series.size(), 0));
     }
 
-    for (int s_idx = 0; s_idx < (int)series.size(); ++s_idx) {
+    auto render_series = [&](int s_idx, BrailleCanvas *target_bc,
+                             std::vector<std::vector<int>> *target_dot_counts) {
       const auto &s = series[s_idx];
-      if (s.points.empty()) continue;
-      if (!s.visible) continue;
+      if (s.points.empty()) return;
+      if (!s.visible) return;
 
       bool use_braille = s.use_braille;
       if (use_braille && !Terminal::has_utf8()) {
@@ -11574,7 +11674,7 @@ class ScatterChart : public ChartBase {
         draw_col = Theme::current().border;
       }
 
-      if (use_braille && shared_bc) {
+      if (use_braille && target_bc) {
         // Helper map Y
         auto map_y = [&](double v) -> int {
           double norm = (v - y_min) / (y_max - y_min);
@@ -11604,11 +11704,12 @@ class ScatterChart : public ChartBase {
           int vx = map_x(px);
           int vy = map_y(py);
 
-          shared_bc->set_dot(vx, vy);
+          target_bc->set_dot(vx, vy);
           int cx = vx / 2;
           int cy = vy / 4;
-          if (cx >= 0 && cx < draw_width && cy >= 0 && cy < draw_height) {
-            cell_dot_counts[cy * draw_width + cx][s_idx]++;
+          if (cx >= 0 && cx < draw_width && cy >= 0 && cy < draw_height &&
+              target_dot_counts) {
+            (*target_dot_counts)[cy * draw_width + cx][s_idx]++;
           }
 
           // Record Hit
@@ -11649,9 +11750,15 @@ class ScatterChart : public ChartBase {
           }
         }
       }
+    };
+
+    // Pass 1: Render all background (non-hovered) series
+    for (int s_idx = 0; s_idx < (int)series.size(); ++s_idx) {
+      if (hovered_series_idx_ != -1 && s_idx == hovered_series_idx_) continue;
+      render_series(s_idx, shared_bc.get(), &cell_dot_counts);
     }
 
-    // Blit BrailleCanvas to Buffer if used
+    // Blit background BrailleCanvas to Buffer if used
     if (use_braille_shared && shared_bc) {
       for (int by = 0; by < draw_height; ++by) {
         for (int bx = 0; bx < draw_width; ++bx) {
@@ -11690,6 +11797,28 @@ class ScatterChart : public ChartBase {
               c.bg_color = bg;
               buffer.set(draw_x + bx, draw_y + by, c);
             }
+          }
+        }
+      }
+    }
+
+    // Pass 2: Render foreground (hovered) series on top
+    if (hovered_series_idx_ != -1 && hovered_series_idx_ < (int)series.size()) {
+      auto hover_bc = std::make_unique<BrailleCanvas>(draw_width, draw_height);
+      std::vector<std::vector<int>> hover_dot_counts(
+          draw_width * draw_height, std::vector<int>(series.size(), 0));
+      render_series(hovered_series_idx_, hover_bc.get(), &hover_dot_counts);
+
+      // Blit foreground BrailleCanvas to Buffer if used
+      for (int by = 0; by < draw_height; ++by) {
+        for (int bx = 0; bx < draw_width; ++bx) {
+          std::string bchar = hover_bc->get_char(bx, by);
+          if (!bchar.empty() && bchar != " ") {
+            Cell c;
+            c.content = bchar;
+            c.fg_color = series[hovered_series_idx_].color;
+            c.bg_color = bg;
+            buffer.set(draw_x + bx, draw_y + by, c);
           }
         }
       }
@@ -16758,6 +16887,26 @@ class App {
           if (!dialog_handled && root) {
             if (root->on_event(event)) {
               needs_render = true;
+            }
+          }
+
+          // Sync active_tooltip_ immediately if the hovered widget dynamically
+          // updated, created, or cleared its tooltip during on_event
+          if (hovered_widget_) {
+            if (hovered_widget_->tooltip_) {
+              if (active_tooltip_ != hovered_widget_->tooltip_) {
+                active_tooltip_ = hovered_widget_->tooltip_;
+                active_tooltip_->attach(hovered_widget_);
+                active_tooltip_->show();
+                needs_render = true;
+              }
+            } else {
+              if (active_tooltip_ &&
+                  active_tooltip_->target == hovered_widget_) {
+                active_tooltip_->hide();
+                active_tooltip_ = nullptr;
+                needs_render = true;
+              }
             }
           }
         } else {
