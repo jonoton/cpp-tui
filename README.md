@@ -36,9 +36,11 @@ A lightweight, single-header C++ TUI (Text User Interface) library.
         - `TextList`: Formatted lists with bullets or numbering and text selection.
     - **Containers**: `Tabs` (tabbed interface with overflow navigation), `Carousel` (slide-show), `Stack` (z-ordering), `ScrollableVertical`, `ScrollableHorizontal`, `ScrollableContainer` (2D panning), `Dialog`, `FileExplorer` (File system browser).
     - **Charting**:
-        - `LineChart`: Multi-series line graphs (Points, Lines, Braille styles supported) with interactive tooltips.
-        - `ScatterChart`: Plot points with custom markers and interactive tooltips.
-        - `BarChart`: Vertical bar graphs with support for axes, ticks, and interactive tooltips.
+        - `LineChart`: Multi-series line graphs (Points, Lines, Braille styles supported) with interactive tooltips, gridlines, auto-scaling, and area fills.
+        - `ScatterChart`: Plot points with custom markers, interactive tooltips, gridlines, and auto-scaling.
+        - `BarChart`: Vertical bar graphs with support for axes, ticks, gridlines, and interactive tooltips.
+        - `PieChart`: Circular charts with Pie and Donut configurations using subpixel Braille quadrant mapping.
+        - `BoxWhiskerPlot`: Statistical distribution box plots with customizable colors.
     - **Menus**: Popup menu system with keyboard/mouse support.
 - **Layouts**:
     - **Containers**: `Vertical`, `Horizontal`, `Grid`, and `Align`.

@@ -592,7 +592,18 @@ bar->char_empty = "░";
 
 #### `Sparkline`
 
-Displays a simple line graph of a data series. Supports generic widget tooltips (`set_tooltip`).
+Displays a dynamic line graph of a data series. Supports multi-line heights, auto-scaling, custom thresholds, and current value label printing.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `data` | `vector<float>` | List of values |
+| `height` | `int` | Height of the sparkline plot in cells |
+| `auto_scale` | `bool` | Auto-scale value limits (default `false`) |
+| `min_val` / `max_val` | `float` | Fixed range limits when `auto_scale = false` |
+| `color` | `Color` | Fallback color of the sparkline |
+| `show_label` | `bool` | Print current/latest value as a label next to the sparkline |
+| `label_format` | `string` | Custom label format (e.g. ` " %.2f"`) |
+| `color_thresholds` | `vector<pair<float, Color>>` | Threshold bounds for dynamic color mapping |
 
 ---
 
@@ -1093,8 +1104,10 @@ chart->show_tooltip = true;
 | Property | Type | Description |
 |----------|------|-------------|
 | `series` | `vector<Series>` | List of data series (see below) |
-| `show_legend` | `bool` | Show series legend |
-| `min_val` / `max_val` | `float` | Axis range |
+| `show_legend` | `bool` | Show interactive series legend (supports click-to-toggle and hover-highlight) |
+| `show_grid_lines` | `bool` | Show background grid lines aligned with ticks |
+| `auto_scale` | `bool` | Automatically scale axis range with a 5% margin buffer |
+| `min_val` / `max_val` | `float` | Axis range (for LineChart y-axis) |
 | `x_tick_count` / `y_tick_count` | `int` | Number of tick marks |
 | `x_tick_precision` / `y_tick_precision` | `int` | Decimal places for labels |
 | `label_all_x_ticks` / `label_all_y_ticks` | `bool` | Force label on every tick |
@@ -1111,6 +1124,10 @@ chart->show_tooltip = true;
 | `marker` | `string` | Marker character (for Points style, default `*`) |
 | `style` | `LineStyle` | `Points`, `Lines`, or `Braille` |
 | `fill_gaps` | `bool` | Interpolate missing values (default `true`) |
+| `fill` | `bool` | Shading fill underneath line plot (default `false`) |
+| `fill_char` | `string` | Filling character block (default `"░"`) |
+| `fill_color` | `Color` | Custom background fill color |
+| `visible` | `bool` | Series visibility control (default `true`) |
 
 **Styles:** `LineStyle::Points`, `LineStyle::Lines`, `LineStyle::Braille`
 
@@ -1167,6 +1184,52 @@ bar->show_percentages = true;
 |----------|------|-------------|
 | `show_legend` | `bool` | Show segment legend |
 | `show_percentages` | `bool` | Show percentage labels in legend |
+
+---
+
+#### `PieChart`
+
+Circular chart widget supporting Pie and Donut configurations with subpixel Braille quadrant mapping.
+
+```cpp
+auto pie = std::make_shared<PieChart>();
+pie->add_segment(45, "Chrome", Color::Blue());
+pie->add_segment(35, "Firefox", Color::Red());
+pie->donut = true;
+pie->inner_radius_ratio = 0.4;
+```
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `segments` | `vector<Segment>` | List of segments (`value`, `label`, `color`) |
+| `show_legend` | `bool` | Show segment side legend (default `true`) |
+| `show_percentages` | `bool` | Append share percentage labels to legend (default `true`) |
+| `donut` | `bool` | Render with a central hole (default `false`) |
+| `inner_radius_ratio` | `double` | Ratio of the donut central hole radius (0.0 to 1.0, default `0.4`) |
+| `radius_scale` | `double` | Inner circle size multiplier inside widget bounds (default `1.0`) |
+| `aspect_ratio` | `double` | Aspect ratio scaling for block-fallback rendering (default `2.0`) |
+
+---
+
+#### `BoxWhiskerPlot`
+
+Statistical distribution box plot displaying minimum, Q1, median, Q3, and maximum values.
+
+```cpp
+auto box = std::make_shared<BoxWhiskerPlot>();
+box->label = "Latency";
+box->set_data(10.0, 35.0, 52.0, 70.0, 95.0);
+```
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `min_val` / `q1_val` / `median_val` / `q3_val` / `max_val` | `double` | Quartile values |
+| `range_min` / `range_max` | `double` | Fixed range limits when `auto_scale = false` |
+| `auto_scale` | `bool` | Auto-scale plot bounds based on min/max data (default `true`) |
+| `box_color` | `Color` | Color of the IQR box |
+| `whisker_color` | `Color` | Color of the whisker lines and caps |
+| `median_color` | `Color` | Color of the median line |
+| `label` | `string` | Display label next to the plot |
 
 ---
 

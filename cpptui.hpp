@@ -34,7 +34,7 @@
 namespace cpptui {
 
 constexpr int VERSION_MAJOR = 1;
-constexpr int VERSION_MINOR = 8;
+constexpr int VERSION_MINOR = 9;
 constexpr int VERSION_PATCH = 0;
 
 inline std::string version() {
@@ -9820,26 +9820,109 @@ class Sparkline : public Widget {
   std::vector<float> data;
   Color color = {0, 255, 255, true};
 
+  // Sparkline Enhancements
+  bool auto_scale = false;
+  float min_val = 0.0f;
+  float max_val = 1.0f;
+
+  std::vector<std::pair<float, Color>> color_thresholds;
+
+  bool show_label = false;
+  std::string label_format = "%.1f";
+  Color label_color = Color();
+
   void render(Buffer &buffer) override {
     if (data.empty()) return;
-    const std::string blocks[] = {" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"};
-    int start_idx = std::max(0, (int)data.size() - width);
-    Color c_col = color.resolve(Theme::current().primary);
 
-    for (int dx = 0; dx < width; ++dx) {
+    // 1. Auto-scaling calculation
+    float actual_min = min_val;
+    float actual_max = max_val;
+    if (auto_scale) {
+      actual_min = std::numeric_limits<float>::max();
+      actual_max = std::numeric_limits<float>::lowest();
+      for (float v : data) {
+        if (v < actual_min) actual_min = v;
+        if (v > actual_max) actual_max = v;
+      }
+      if (actual_min == actual_max) {
+        actual_min -= 1.0f;
+        actual_max += 1.0f;
+      }
+    }
+
+    // 2. Handle label reservation
+    std::string val_label = "";
+    int label_w = 0;
+    if (show_label) {
+      char buf[64];
+      snprintf(buf, sizeof(buf), label_format.c_str(), data.back());
+      val_label = " " + std::string(buf);
+      label_w = val_label.size();
+    }
+
+    int plot_width = width - label_w;
+    if (plot_width <= 0) plot_width = width;  // Fallback if too small
+
+    const std::string blocks[] = {" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"};
+    int start_idx = std::max(0, (int)data.size() - plot_width);
+
+    // 3. Multi-line rendering algorithm
+    for (int dx = 0; dx < plot_width; ++dx) {
       int data_idx = start_idx + dx;
       if (data_idx >= (int)data.size()) break;
 
-      float val = data[data_idx];
-      if (val < 0) val = 0;
-      if (val > 1) val = 1;
-      int level = static_cast<int>(val * 7);
+      float raw_val = data[data_idx];
+      float val = (actual_max == actual_min)
+                      ? 0.0f
+                      : (raw_val - actual_min) / (actual_max - actual_min);
+      if (val < 0.0f) val = 0.0f;
+      if (val > 1.0f) val = 1.0f;
 
-      Cell c;
-      c.fg_color = c_col;
-      c.bg_color = Theme::current().background;
-      c.content = blocks[level];
-      buffer.set(x + dx, y + height - 1, c);
+      // Select color based on threshold matching (using raw_val)
+      Color c_col = color.resolve(Theme::current().primary);
+      for (const auto &thresh : color_thresholds) {
+        if (raw_val >= thresh.first) {
+          c_col = thresh.second;
+        }
+      }
+
+      int total_levels = height * 8;
+      int filled_levels = static_cast<int>(val * total_levels);
+
+      for (int row = 0; row < height; ++row) {
+        int cell_y =
+            y + height - 1 - row;  // row = 0 is bottom, height-1 is top
+        int level = filled_levels - row * 8;
+
+        Cell c;
+        c.fg_color = c_col;
+        c.bg_color = bg_color.resolve(Theme::current().background);
+
+        if (level >= 8) {
+          c.content = "█";
+          buffer.set(x + dx, cell_y, c);
+        } else if (level <= 0) {
+          c.content = " ";
+          buffer.set(x + dx, cell_y, c);
+        } else {
+          c.content = blocks[level];
+          buffer.set(x + dx, cell_y, c);
+        }
+      }
+    }
+
+    // 4. Render Numeric Label (aligned at the right edge)
+    if (show_label && label_w > 0) {
+      Color lbl_col = label_color.resolve(Theme::current().foreground);
+      int label_x = x + plot_width;
+      int label_y = y + height - 1;  // bottom row
+      for (int i = 0; i < label_w && label_x + i < x + width; ++i) {
+        Cell c;
+        c.content = std::string(1, val_label[i]);
+        c.fg_color = lbl_col;
+        c.bg_color = bg_color.resolve(Theme::current().background);
+        buffer.set(label_x + i, label_y, c);
+      }
     }
   }
 };
@@ -9900,6 +9983,32 @@ class BrailleCanvas {
     }
 
     grid[cy * width + cx] |= bit;
+  }
+
+  // Draw a line using subpixel virtual coordinates (Bresenham's algorithm)
+  void draw_line(int x0, int y0, int x1, int y1,
+                 std::function<void(int, int)> set_pixel = nullptr) {
+    int dx = std::abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    int dy = -std::abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy, e2;
+
+    while (true) {
+      if (set_pixel) {
+        set_pixel(x0, y0);
+      } else {
+        set_dot(x0, y0);
+      }
+      if (x0 == x1 && y0 == y1) break;
+      e2 = 2 * err;
+      if (e2 >= dy) {
+        err += dy;
+        x0 += sx;
+      }
+      if (e2 <= dx) {
+        err += dx;
+        y0 += sy;
+      }
+    }
   }
 
   // Unicode Braille Pattern Start: U+2800
@@ -10172,6 +10281,7 @@ class ChartBase : public Widget {
   Color axis_color = Color();
   Color label_color = Color();
   Color grid_color = Color();
+  Color zero_axis_color = Color();
 
   // Tick customization
   int x_tick_count = 10;
@@ -10185,8 +10295,23 @@ class ChartBase : public Widget {
   bool show_tooltip = false;
   int tooltip_duration_ms = 1000;
 
-  bool show_legend = false;
-  std::chrono::steady_clock::time_point last_hit_time_;
+  bool show_legend = false;  ///< Show interactive series legend
+  bool show_grid_lines =
+      false;                ///< Show background grid lines aligned with ticks
+  bool auto_scale = false;  ///< Dynamically scale axis range to fit data series
+  std::chrono::steady_clock::time_point
+      last_hit_time_;  ///< Last time hover hit occurred
+
+  /// @brief Bounding box tracking for mouse click hits on legend text
+  struct LegendHit {
+    int x, y;          ///< Coordinate position
+    int width;         ///< Bounding width
+    int series_index;  ///< Associated series index
+  };
+  mutable std::vector<LegendHit>
+      legend_hits_;  ///< Screen locations of drawn legend items
+  int hovered_series_idx_ =
+      -1;  ///< Currently hovered legend item index (-1 if none)
 
  protected:
   /// @brief Format a tick label value
@@ -10219,6 +10344,11 @@ class LineChart : public ChartBase {
     std::string marker = "*";  ///< Marker character (for Points style)
     LineStyle style = LineStyle::Lines;  ///< Render style
     bool fill_gaps = true;  ///< Interpolate missing x-values if continuous
+    bool fill = false;  ///< Shade/fill area beneath the curve down to baseline
+    std::string fill_char = "░";  ///< Filling character used in Lines style
+    Color fill_color =
+        Color();          ///< Custom filling color (default is series color)
+    bool visible = true;  ///< Toggle series visibility in chart and legend
   };
 
   std::vector<Series> series;
@@ -10255,16 +10385,52 @@ class LineChart : public ChartBase {
   std::function<std::string(const Series &, int, double)> tooltip_formatter;
 
   bool on_event(const Event &event) override {
-    if (!show_tooltip) return false;
+    bool requested_update = false;
 
     if (event.is_mouse_event()) {
-      if (event.mouse_wheel()) return false;
-      bool hit_found = false;
+      if (contains(event.x, event.y)) {
+        // 1. Check Legend Hits
+        int prev_hovered = hovered_series_idx_;
+        hovered_series_idx_ = -1;  // Reset hover
 
-      // Check if mouse is within chart bounds
+        for (const auto &hit : legend_hits_) {
+          if (event.x >= hit.x && event.x < hit.x + hit.width &&
+              event.y == hit.y) {
+            hovered_series_idx_ = hit.series_index;
+            break;
+          }
+        }
+
+        if (hovered_series_idx_ != prev_hovered) {
+          requested_update = true;
+        }
+
+        // Handle Click (toggling)
+        if (event.mouse_left() && !event.mouse_motion()) {
+          for (const auto &hit : legend_hits_) {
+            if (event.x >= hit.x && event.x < hit.x + hit.width &&
+                event.y == hit.y) {
+              series[hit.series_index].visible =
+                  !series[hit.series_index].visible;
+              requested_update = true;
+              return true;  // Click handled
+            }
+          }
+        }
+      } else {
+        // If mouse moved outside widget, clear hover highlight
+        if (hovered_series_idx_ != -1) {
+          hovered_series_idx_ = -1;
+          requested_update = true;
+        }
+      }
+    }
+
+    // 2. Handle Tooltips if enabled
+    if (show_tooltip && event.is_mouse_event() && !event.mouse_wheel()) {
+      bool hit_found = false;
       if (contains(event.x, event.y)) {
         for (const auto &hit : point_hits_) {
-          // Simple point proximity (exact match or adjacent for easier hitting)
           if (std::abs(event.x - hit.x) <= 1 &&
               std::abs(event.y - hit.y) <= 0) {
             std::string text;
@@ -10272,45 +10438,64 @@ class LineChart : public ChartBase {
               text = tooltip_formatter(series[hit.series_index], hit.data_index,
                                        hit.value);
             } else {
-              // Default format
               std::stringstream ss;
               ss << std::fixed << std::setprecision(2) << hit.value;
               text = series[hit.series_index].label + ": " + ss.str();
             }
 
             if (!tooltip_) tooltip_ = std::make_shared<Tooltip>();
-
             tooltip_->text = text;
             tooltip_->position = Tooltip::Position::Manual;
             tooltip_->manual_x = event.x;
             tooltip_->manual_y = event.y - 1;
             tooltip_->visible = true;
-
             hit_found = true;
             last_hit_time_ = std::chrono::steady_clock::now();
-            return true;  // Request redraw
+            return true;
           }
         }
       }
 
-      if (!hit_found) {
-        if (tooltip_) {
-          // Check for linger
-          auto now = std::chrono::steady_clock::now();
-          auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                             now - last_hit_time_)
-                             .count();
-          if (elapsed >= tooltip_duration_ms) {
-            tooltip_ = nullptr;
-          }
+      if (!hit_found && tooltip_) {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           now - last_hit_time_)
+                           .count();
+        if (elapsed >= tooltip_duration_ms) {
+          tooltip_ = nullptr;
+          requested_update = true;
         }
       }
     }
-    return false;
+
+    return requested_update;
   }
 
   void render(Buffer &buffer) override {
     if (show_tooltip) point_hits_.clear();  // Reset hits for this frame
+
+    if (auto_scale && !series.empty()) {
+      double calculated_min = std::numeric_limits<double>::max();
+      double calculated_max = std::numeric_limits<double>::lowest();
+      bool has_data = false;
+      for (const auto &s : series) {
+        for (double v : s.data) {
+          if (v < calculated_min) calculated_min = v;
+          if (v > calculated_max) calculated_max = v;
+          has_data = true;
+        }
+      }
+      if (has_data) {
+        if (calculated_min == calculated_max) {
+          min_val = calculated_min - 1.0;
+          max_val = calculated_max + 1.0;
+        } else {
+          double range = calculated_max - calculated_min;
+          min_val = calculated_min - range * 0.05;
+          max_val = calculated_max + range * 0.05;
+        }
+      }
+    }
 
     Color bg = bg_color.resolve(Theme::current().background);
     if (series.empty()) return;
@@ -10322,6 +10507,21 @@ class LineChart : public ChartBase {
 
     Color axis = axis_color.resolve(Theme::current().border);
     Color lbl = label_color.resolve(Theme::current().foreground);
+    Color grid_col = grid_color.resolve(Theme::current().border);
+    Color zero_axis_col = zero_axis_color.resolve(Theme::current().foreground);
+
+    bool has_x_labels = show_x_tick_labels && height > 2;
+    bool has_x_axis = show_x_axis;
+
+    int bottom_reserved = 0;
+    if (has_x_labels)
+      bottom_reserved = 1;
+    else if (has_x_axis)
+      bottom_reserved = 1;
+
+    if (show_x_axis && show_x_tick_labels && height > 4) bottom_reserved = 2;
+
+    int plot_height = height - bottom_reserved;
 
     // 1. Calculate Offsets and Draw Y Elements
     int y_label_width = 6;
@@ -10345,13 +10545,13 @@ class LineChart : public ChartBase {
 
     // Draw Y Labels
     if (has_y_labels) {
-      int line_height = height;
-      if (show_x_tick_labels || show_x_axis) line_height--;
+      int line_height = plot_height;
 
       if (label_all_y_ticks && y_tick_count > 1 && line_height > 2) {
         // Label all tick positions
         for (int t = 0; t < y_tick_count; ++t) {
-          int tick_y = y + (line_height - 1) * t / (y_tick_count - 1);
+          int tick_y = y + (int)std::round((double)(line_height - 1) * t /
+                                           (y_tick_count - 1));
           // Calculate value at this tick position (inverted: top is max, bottom
           // is min)
           double val = max_val - (max_val - min_val) * t / (y_tick_count - 1);
@@ -10378,8 +10578,7 @@ class LineChart : public ChartBase {
 
         // Min
         std::string s_min = format_y_label(min_val);
-        int label_bottom_y = y + height - 1;
-        if (show_x_tick_labels || show_x_axis) label_bottom_y--;
+        int label_bottom_y = y + plot_height - 1;
         if (label_bottom_y < y) label_bottom_y = y;
 
         for (int i = 0; i < std::min((int)s_min.size(), y_label_width); ++i) {
@@ -10400,8 +10599,7 @@ class LineChart : public ChartBase {
       if (has_y_axis && !has_y_labels) line_x = x;
 
       if (show_y_axis) {
-        int line_height = height;
-        if (show_x_tick_labels || show_x_axis) line_height--;
+        int line_height = plot_height;
 
         for (int i = 0; i < line_height; ++i) {
           Cell c;
@@ -10411,15 +10609,29 @@ class LineChart : public ChartBase {
           buffer.set(line_x, y + i, c);
         }
 
-        // Y Ticks
-        if (show_y_ticks && y_tick_count > 1) {
+        // Y Ticks & Grid Lines
+        if (y_tick_count > 1) {
           for (int i = 0; i < y_tick_count; ++i) {
-            int tick_y = y + (line_height - 1) * i / (y_tick_count - 1);
-            Cell c;
-            c.bg_color = bg;
-            c.content = "┼";
-            c.fg_color = axis;
-            buffer.set(line_x, tick_y, c);
+            int tick_y = y + (int)std::round((double)(line_height - 1) * i /
+                                             (y_tick_count - 1));
+            if (show_y_ticks) {
+              Cell c;
+              c.bg_color = bg;
+              c.content = "┼";
+              c.fg_color = axis;
+              buffer.set(line_x, tick_y, c);
+            }
+            if (show_grid_lines) {
+              int start_gx = x + left_offset;
+              int end_gx = x + width;
+              for (int gx = start_gx; gx < end_gx; ++gx) {
+                Cell gc;
+                gc.bg_color = bg;
+                gc.content = "─";
+                gc.fg_color = grid_col;
+                buffer.set(gx, tick_y, gc);
+              }
+            }
           }
         }
       }
@@ -10429,50 +10641,58 @@ class LineChart : public ChartBase {
     draw_width -= left_offset;
 
     // 2. Calculate Offsets and Draw X Elements
-    bool has_x_labels = show_x_tick_labels && draw_height > 2;
-    bool has_x_axis = show_x_axis;
-
-    int bottom_reserved = 0;
-    if (has_x_labels)
-      bottom_reserved = 1;
-    else if (has_x_axis)
-      bottom_reserved = 1;
-
-    if (show_x_axis && show_x_tick_labels && height > 4) bottom_reserved = 2;
-
-    int plot_height = height - bottom_reserved;
     int bottom_y = y + height - 1;
-    int axis_y = bottom_y;
-    if (show_x_tick_labels) axis_y--;
-    if (!show_x_tick_labels && show_x_axis) axis_y = bottom_y;
+    int axis_y = y + plot_height - 1;
 
     // Draw X Axis Line & Ticks
     if (show_x_axis) {
       // Determine Axis Y position
       int axis_screen_y = axis_y;
+      bool is_zero_axis = false;
       if (min_val <= 0 && max_val >= 0 && max_val != min_val) {
         double zero_norm = (0.0 - min_val) / (max_val - min_val);
-        int row_from_bottom = (int)(zero_norm * (draw_height - 1));
-        axis_screen_y = (y + draw_height - 1) - row_from_bottom;
+        int row_from_bottom = (int)std::round(zero_norm * (plot_height - 1));
+        axis_screen_y = (y + plot_height - 1) - row_from_bottom;
+        is_zero_axis = true;
       }
 
       for (int i = 0; i < draw_width; ++i) {
         Cell c;
         c.bg_color = bg;
         c.content = "─";
-        c.fg_color = axis;
+        c.fg_color = is_zero_axis ? zero_axis_col : axis;
         buffer.set(draw_x + i, axis_screen_y, c);
       }
 
-      // X Ticks
-      if (show_x_ticks && x_tick_count > 1) {
+      // X Ticks & Grid Lines
+      if (x_tick_count > 1) {
         for (int i = 0; i < x_tick_count; ++i) {
           int tick_x = draw_x + (draw_width - 1) * i / (x_tick_count - 1);
-          Cell c;
-          c.bg_color = bg;
-          c.content = "┼";
-          c.fg_color = axis;
-          buffer.set(tick_x, axis_screen_y, c);
+          if (show_x_ticks) {
+            Cell c;
+            c.bg_color = bg;
+            c.content = "┼";
+            c.fg_color = is_zero_axis ? zero_axis_col : axis;
+            buffer.set(tick_x, axis_screen_y, c);
+          }
+          if (show_grid_lines) {
+            for (int gy = 0; gy < plot_height; ++gy) {
+              int screen_gy = y + gy;
+              if (show_x_axis && screen_gy == axis_screen_y) continue;
+              if (show_y_axis && tick_x == (x + left_offset - 1)) continue;
+
+              const Cell &existing = buffer.get(tick_x, screen_gy);
+              Cell gc;
+              gc.bg_color = bg;
+              gc.fg_color = grid_col;
+              if (existing.content == "─") {
+                gc.content = "┼";
+              } else {
+                gc.content = "│";
+              }
+              buffer.set(tick_x, screen_gy, gc);
+            }
+          }
         }
       }
 
@@ -10491,6 +10711,30 @@ class LineChart : public ChartBase {
         }
 
         buffer.set(line_x, axis_screen_y, c);
+      }
+
+      // Draw vertical mathematical Y-axis line at index 0
+      if (show_y_axis) {
+        int zero_x_screen = draw_x;
+        for (int gy = 0; gy < plot_height; ++gy) {
+          int screen_gy = y + gy;
+          if (show_x_axis && screen_gy == axis_screen_y) continue;
+
+          Cell c;
+          c.bg_color = bg;
+          c.content = "│";
+          c.fg_color = zero_axis_col;
+          buffer.set(zero_x_screen, screen_gy, c);
+        }
+
+        if (show_x_axis && axis_screen_y >= y &&
+            axis_screen_y < y + plot_height) {
+          Cell c;
+          c.bg_color = bg;
+          c.content = "┼";
+          c.fg_color = zero_axis_col;
+          buffer.set(zero_x_screen, axis_screen_y, c);
+        }
       }
     }
 
@@ -10576,21 +10820,36 @@ class LineChart : public ChartBase {
     if (draw_height <= 0 || draw_width <= 0) return;
 
     [[maybe_unused]] bool needs_braille = false;
-    for (const auto &s : series)
-      if (s.style == LineStyle::Braille) needs_braille = true;
+    for (const auto &s : series) {
+      if (s.visible && s.style == LineStyle::Braille) needs_braille = true;
+    }
+
+    bool use_braille_shared = needs_braille && Terminal::has_utf8();
+    std::unique_ptr<BrailleCanvas> shared_bc;
+    std::vector<std::vector<int>> cell_dot_counts;
+
+    if (use_braille_shared) {
+      shared_bc = std::make_unique<BrailleCanvas>(draw_width, draw_height);
+      cell_dot_counts.assign(draw_width * draw_height,
+                             std::vector<int>(series.size(), 0));
+    }
 
     for (int s_idx = 0; s_idx < (int)series.size(); ++s_idx) {
       const auto &s = series[s_idx];
       if (s.data.empty()) continue;
+      if (!s.visible) continue;
 
       LineStyle effective_style = s.style;
       if (effective_style == LineStyle::Braille && !Terminal::has_utf8()) {
         effective_style = LineStyle::Lines;
       }
 
-      if (effective_style == LineStyle::Braille) {
-        BrailleCanvas bc(draw_width, draw_height);
+      Color draw_col = s.color;
+      if (hovered_series_idx_ != -1 && s_idx != hovered_series_idx_) {
+        draw_col = Theme::current().border;
+      }
 
+      if (effective_style == LineStyle::Braille && shared_bc) {
         // Helper map
         auto map_y = [&](double v) -> int {
           double norm = (v - min_val) / (max_val - min_val);
@@ -10598,11 +10857,28 @@ class LineChart : public ChartBase {
           if (norm > 1) norm = 1;
           // 4 sub-pixels per cell height
           int virtual_h = draw_height * 4;
-          int row_from_bottom = (int)(norm * (virtual_h - 1));
+          int row_from_bottom = (int)std::round(norm * (virtual_h - 1));
           return (virtual_h - 1) - row_from_bottom;
         };
 
+        int virtual_baseline_y = draw_height * 4 - 1;
+        if (show_x_axis && min_val <= 0 && max_val >= 0 && max_val != min_val) {
+          double zero_norm = (0.0 - min_val) / (max_val - min_val);
+          int row_from_bottom = (int)std::round(zero_norm * (draw_height - 1));
+          int axis_screen_y = (draw_height - 1) - row_from_bottom;
+          virtual_baseline_y = axis_screen_y * 4 + 2;
+        }
+
         int prev_vy = -1;
+
+        auto plot_dot = [&](int vx, int vy) {
+          shared_bc->set_dot(vx, vy);
+          int cx = vx / 2;
+          int cy = vy / 4;
+          if (cx >= 0 && cx < draw_width && cy >= 0 && cy < draw_height) {
+            cell_dot_counts[cy * draw_width + cx][s_idx]++;
+          }
+        };
 
         for (int dx = 0; dx < draw_width; ++dx) {
           for (int sub_x = 0; sub_x < 2; ++sub_x) {
@@ -10623,42 +10899,33 @@ class LineChart : public ChartBase {
             double frac = exact_idx - idx0;
             double val = s.data[idx0] * (1.0 - frac) + s.data[idx1] * frac;
 
+            int vx = dx * 2 + sub_x;
             int vy = map_y(val);
 
-            // Connect dots (Interpolate Y)
+            // Connect dots using subpixel vector lines
             if (prev_vy != -1 && s.fill_gaps) {
-              int start_y = std::min(prev_vy, vy);
-              int end_y = std::max(prev_vy, vy);
-              for (int y = start_y; y <= end_y; ++y) {
-                bc.set_dot(dx * 2 + sub_x, y);
-              }
+              shared_bc->draw_line(vx - 1, prev_vy, vx, vy, plot_dot);
             } else {
-              bc.set_dot(dx * 2 + sub_x, vy);
+              plot_dot(vx, vy);
+            }
+
+            if (s.fill) {
+              int start_vy = vy;
+              int end_vy = virtual_baseline_y;
+              if (start_vy > end_vy) std::swap(start_vy, end_vy);
+              for (int y_fill = start_vy; y_fill <= end_vy; ++y_fill) {
+                plot_dot(vx, y_fill);
+              }
             }
             prev_vy = vy;
 
-            // Record Hit (approximate for Braille: map back to cell)
-            // Use the main cell center logic
-            if (sub_x == 0) {  // Record once per column for simplicity
+            // Record Hit
+            if (sub_x == 0) {
               int cell_y = vy / 4;
               if (show_tooltip) {
                 point_hits_.push_back(
                     {draw_x + dx, draw_y + cell_y, s_idx, idx0, s.data[idx0]});
               }
-            }
-          }
-        }
-
-        // Blit BrailleCanvas to Buffer
-        for (int by = 0; by < draw_height; ++by) {
-          for (int bx = 0; bx < draw_width; ++bx) {
-            std::string bchar = bc.get_char(bx, by);
-            if (!bchar.empty()) {
-              Cell c;
-              c.content = bchar;
-              c.fg_color = s.color;
-              c.bg_color = bg;
-              buffer.set(draw_x + bx, draw_y + by, c);
             }
           }
         }
@@ -10678,13 +10945,40 @@ class LineChart : public ChartBase {
           if (norm < 0) norm = 0;
           if (norm > 1) norm = 1;
 
-          int row_from_bottom = (int)(norm * (draw_height - 1));
+          int row_from_bottom = (int)std::round(norm * (draw_height - 1));
           int screen_y = (y + draw_height - 1) - row_from_bottom;
+
+          int baseline_y = y + draw_height - 1;
+          if (show_x_axis && min_val <= 0 && max_val >= 0 &&
+              max_val != min_val) {
+            double zero_norm = (0.0 - min_val) / (max_val - min_val);
+            int row_from_bottom_zero =
+                (int)std::round(zero_norm * (draw_height - 1));
+            baseline_y = (y + draw_height - 1) - row_from_bottom_zero;
+          }
+
+          if (s.fill) {
+            int start_fy = screen_y;
+            int end_fy = baseline_y;
+            if (start_fy > end_fy) std::swap(start_fy, end_fy);
+            Color f_col = s.fill_color.is_default ? draw_col : s.fill_color;
+            if (hovered_series_idx_ != -1 && s_idx != hovered_series_idx_) {
+              f_col = Theme::current().border;
+            }
+            for (int fill_y = start_fy; fill_y <= end_fy; ++fill_y) {
+              if (fill_y == screen_y) continue;
+              Cell fc;
+              fc.content = s.fill_char;
+              fc.fg_color = f_col;
+              fc.bg_color = bg;
+              buffer.set(draw_x + dx, fill_y, fc);
+            }
+          }
 
           // Plot
           Cell c;
           c.content = s.marker;
-          c.fg_color = s.color;
+          c.fg_color = draw_col;
           c.bg_color = bg;
           buffer.set(draw_x + dx, screen_y, c);
 
@@ -10707,7 +11001,6 @@ class LineChart : public ChartBase {
             int y1 = prev_screen_y;
             int y2 = screen_y;
             if (dx > 0) {  // Connect to previous column
-              // Fill vertical column at current X to bridge the jump
               int lower = std::min(y1, y2);
               int upper = std::max(y1, y2);
               for (int iy = lower + 1; iy < upper; ++iy) {
@@ -10720,21 +11013,79 @@ class LineChart : public ChartBase {
       }
     }
 
+    // Blit BrailleCanvas to Buffer if used
+    if (use_braille_shared && shared_bc) {
+      for (int by = 0; by < draw_height; ++by) {
+        for (int bx = 0; bx < draw_width; ++bx) {
+          std::string bchar = shared_bc->get_char(bx, by);
+          if (!bchar.empty() && bchar != " ") {
+            // Find dominant series index in this cell
+            int max_count = 0;
+            int best_idx = -1;
+            const auto &counts = cell_dot_counts[by * draw_width + bx];
+            for (size_t i = 0; i < series.size(); ++i) {
+              if (counts[i] > max_count) {
+                max_count = counts[i];
+                best_idx = i;
+              }
+            }
+
+            if (best_idx == -1) {
+              for (size_t i = 0; i < series.size(); ++i) {
+                if (series[i].visible &&
+                    series[i].style == LineStyle::Braille) {
+                  best_idx = i;
+                  break;
+                }
+              }
+            }
+
+            if (best_idx != -1) {
+              Color draw_col = series[best_idx].color;
+              if (hovered_series_idx_ != -1 &&
+                  best_idx != hovered_series_idx_) {
+                draw_col = Theme::current().border;
+              }
+
+              Cell c;
+              c.content = bchar;
+              c.fg_color = draw_col;
+              c.bg_color = bg;
+              buffer.set(draw_x + bx, draw_y + by, c);
+            }
+          }
+        }
+      }
+    }
+
     // 4. Draw Legend
+    legend_hits_.clear();
     if (show_legend) {
       int ly = y;
-      for (const auto &s : series) {
+      for (size_t s_idx = 0; s_idx < series.size(); ++s_idx) {
+        const auto &s = series[s_idx];
         if (s.label.empty()) continue;
         int legend_len = s.label.size();
         int lx = x + width - legend_len - 2;
         if (lx < x) lx = x;
+
+        Color leg_col = s.color;
+        if (!s.visible) {
+          leg_col = Theme::current().border;
+        } else if (hovered_series_idx_ != -1 &&
+                   (int)s_idx != hovered_series_idx_) {
+          leg_col = Theme::current().border;
+        }
+
         for (int i = 0; i < legend_len; ++i) {
           Cell c;
           c.content = std::string(1, s.label[i]);
-          c.fg_color = s.color;
+          c.fg_color = leg_col;
           c.bg_color = bg;
           buffer.set(lx + i, ly, c);
         }
+
+        legend_hits_.push_back({lx, ly, legend_len, (int)s_idx});
         ly++;
         if (ly >= y + height) break;
       }
@@ -10754,6 +11105,7 @@ class ScatterChart : public ChartBase {
     Color color;                                    ///< Series color
     std::string marker = "*";                       ///< Marker string
     bool use_braille = false;  ///< Use braille for high density (experimental)
+    bool visible = true;       ///< Toggle series visibility in chart and legend
   };
 
   std::vector<Series> series;
@@ -10793,12 +11145,50 @@ class ScatterChart : public ChartBase {
       tooltip_formatter;
 
   bool on_event(const Event &event) override {
-    if (!show_tooltip) return false;
+    bool requested_update = false;
 
     if (event.is_mouse_event()) {
-      if (event.mouse_wheel()) return false;
-      bool hit_found = false;
+      if (contains(event.x, event.y)) {
+        // 1. Check Legend Hits
+        int prev_hovered = hovered_series_idx_;
+        hovered_series_idx_ = -1;  // Reset hover
 
+        for (const auto &hit : legend_hits_) {
+          if (event.x >= hit.x && event.x < hit.x + hit.width &&
+              event.y == hit.y) {
+            hovered_series_idx_ = hit.series_index;
+            break;
+          }
+        }
+
+        if (hovered_series_idx_ != prev_hovered) {
+          requested_update = true;
+        }
+
+        // Handle Click (toggling)
+        if (event.mouse_left() && !event.mouse_motion()) {
+          for (const auto &hit : legend_hits_) {
+            if (event.x >= hit.x && event.x < hit.x + hit.width &&
+                event.y == hit.y) {
+              series[hit.series_index].visible =
+                  !series[hit.series_index].visible;
+              requested_update = true;
+              return true;  // Click handled
+            }
+          }
+        }
+      } else {
+        // If mouse moved outside widget, clear hover highlight
+        if (hovered_series_idx_ != -1) {
+          hovered_series_idx_ = -1;
+          requested_update = true;
+        }
+      }
+    }
+
+    // 2. Handle Tooltips if enabled
+    if (show_tooltip && event.is_mouse_event() && !event.mouse_wheel()) {
+      bool hit_found = false;
       if (contains(event.x, event.y)) {
         for (const auto &hit : point_hits_) {
           if (std::abs(event.x - hit.x) <= 1 &&
@@ -10815,13 +11205,11 @@ class ScatterChart : public ChartBase {
             }
 
             if (!tooltip_) tooltip_ = std::make_shared<Tooltip>();
-
             tooltip_->text = text;
             tooltip_->position = Tooltip::Position::Manual;
             tooltip_->manual_x = event.x;
             tooltip_->manual_y = event.y - 1;
             tooltip_->visible = true;
-
             hit_found = true;
             last_hit_time_ = std::chrono::steady_clock::now();
             return true;
@@ -10829,34 +11217,85 @@ class ScatterChart : public ChartBase {
         }
       }
 
-      if (!hit_found) {
-        if (tooltip_) {
-          auto now = std::chrono::steady_clock::now();
-          auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                             now - last_hit_time_)
-                             .count();
-          if (elapsed >= tooltip_duration_ms) {
-            tooltip_ = nullptr;
-          }
+      if (!hit_found && tooltip_) {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           now - last_hit_time_)
+                           .count();
+        if (elapsed >= tooltip_duration_ms) {
+          tooltip_ = nullptr;
+          requested_update = true;
         }
       }
     }
-    return false;
+
+    return requested_update;
   }
 
   void render(Buffer &buffer) override {
     if (show_tooltip) point_hits_.clear();
+
+    if (auto_scale && !series.empty()) {
+      double calculated_x_min = std::numeric_limits<double>::max();
+      double calculated_x_max = std::numeric_limits<double>::lowest();
+      double calculated_y_min = std::numeric_limits<double>::max();
+      double calculated_y_max = std::numeric_limits<double>::lowest();
+      bool has_data = false;
+      for (const auto &s : series) {
+        for (const auto &p : s.points) {
+          if (p.first < calculated_x_min) calculated_x_min = p.first;
+          if (p.first > calculated_x_max) calculated_x_max = p.first;
+          if (p.second < calculated_y_min) calculated_y_min = p.second;
+          if (p.second > calculated_y_max) calculated_y_max = p.second;
+          has_data = true;
+        }
+      }
+      if (has_data) {
+        if (calculated_x_min == calculated_x_max) {
+          x_min = calculated_x_min - 1.0;
+          x_max = calculated_x_max + 1.0;
+        } else {
+          double range_x = calculated_x_max - calculated_x_min;
+          x_min = calculated_x_min - range_x * 0.05;
+          x_max = calculated_x_max + range_x * 0.05;
+        }
+        if (calculated_y_min == calculated_y_max) {
+          y_min = calculated_y_min - 1.0;
+          y_max = calculated_y_max + 1.0;
+        } else {
+          double range_y = calculated_y_max - calculated_y_min;
+          y_min = calculated_y_min - range_y * 0.05;
+          y_max = calculated_y_max + range_y * 0.05;
+        }
+      }
+    }
+
     Color bg = bg_color.resolve(Theme::current().background);
 
     // Resolve defaults
     Color axis = axis_color.resolve(Theme::current().border);
     Color lbl = label_color.resolve(Theme::current().foreground);
+    Color grid_col = grid_color.resolve(Theme::current().border);
+    Color zero_axis_col = zero_axis_color.resolve(Theme::current().foreground);
     // Draw Axes
 
     int draw_x = x;
     int draw_y = y;
     int draw_width = width;
     int draw_height = height;
+
+    bool has_x_labels = show_x_tick_labels && height > 2;
+    bool has_x_axis = show_x_axis;
+
+    int bottom_reserved = 0;
+    if (has_x_labels)
+      bottom_reserved = 1;
+    else if (has_x_axis)
+      bottom_reserved = 1;
+
+    if (show_x_axis && show_x_tick_labels && height > 4) bottom_reserved = 2;
+
+    int plot_height = height - bottom_reserved;
 
     // 1. Calculate Offsets and Draw Y Elements
     int y_label_width = 6;
@@ -10887,6 +11326,8 @@ class ScatterChart : public ChartBase {
 
     // Draw Y Labels
     if (has_y_labels) {
+      int line_height = plot_height;
+
       // Max
       std::string s_max = format_y_label(y_max);
       for (int i = 0; i < std::min((int)s_max.size(), y_label_width); ++i) {
@@ -10899,8 +11340,7 @@ class ScatterChart : public ChartBase {
 
       // Min
       std::string s_min = format_y_label(y_min);
-      int label_bottom_y = y + height - 1;
-      if (show_x_tick_labels || show_x_axis) label_bottom_y--;
+      int label_bottom_y = y + plot_height - 1;
       if (label_bottom_y < y) label_bottom_y = y;
 
       for (int i = 0; i < std::min((int)s_min.size(), y_label_width); ++i) {
@@ -10918,8 +11358,7 @@ class ScatterChart : public ChartBase {
         int line_x = x + left_offset - 1;
         if (has_y_axis && !has_y_labels) line_x = x;
 
-        int line_height = height;
-        if (show_x_tick_labels || show_x_axis) line_height--;
+        int line_height = plot_height;
 
         for (int i = 0; i < line_height; ++i) {
           Cell c;
@@ -10929,15 +11368,29 @@ class ScatterChart : public ChartBase {
           buffer.set(line_x, y + i, c);
         }
 
-        // Y Ticks
-        if (show_y_ticks && y_tick_count > 1) {
+        // Y Ticks & Grid Lines
+        if (y_tick_count > 1) {
           for (int i = 0; i < y_tick_count; ++i) {
-            int tick_y = y + (line_height - 1) * i / (y_tick_count - 1);
-            Cell c;
-            c.bg_color = bg;
-            c.content = "┼";
-            c.fg_color = axis;
-            buffer.set(line_x, tick_y, c);
+            int tick_y = y + (int)std::round((double)(line_height - 1) * i /
+                                             (y_tick_count - 1));
+            if (show_y_ticks) {
+              Cell c;
+              c.bg_color = bg;
+              c.content = "┼";
+              c.fg_color = axis;
+              buffer.set(line_x, tick_y, c);
+            }
+            if (show_grid_lines) {
+              int start_gx = x + left_offset;
+              int end_gx = x + width;
+              for (int gx = start_gx; gx < end_gx; ++gx) {
+                Cell gc;
+                gc.bg_color = bg;
+                gc.content = "─";
+                gc.fg_color = grid_col;
+                buffer.set(gx, tick_y, gc);
+              }
+            }
           }
         }
       }
@@ -10947,53 +11400,60 @@ class ScatterChart : public ChartBase {
     draw_width -= left_offset;
 
     // 2. Calculate Offsets and Draw X Elements
-    bool has_x_labels = show_x_tick_labels && draw_height > 2;
-    bool has_x_axis = show_x_axis;
-
-    int bottom_reserved = 0;
-    if (has_x_labels)
-      bottom_reserved = 1;
-    else if (has_x_axis)
-      bottom_reserved = 1;
-
-    if (show_x_axis && show_x_tick_labels && height > 4)
-      bottom_reserved = 2;  // Reserve 2 if both
-
-    int plot_height = height - bottom_reserved;
     int bottom_y = y + height - 1;
-    int axis_y = bottom_y;
-    if (show_x_tick_labels) axis_y--;
-    if (!show_x_tick_labels && show_x_axis) axis_y = bottom_y;
+    int axis_y = y + plot_height - 1;
 
     // Draw X Axis Line & Ticks
     if (show_x_axis) {
       // Determine Axis Y position
       int axis_screen_y = axis_y;
+      bool is_zero_axis = false;
 
       // If 0 is in range [y_min, y_max]
       if (y_min <= 0 && y_max >= 0 && y_max != y_min) {
         double zero_norm = (0.0 - y_min) / (y_max - y_min);
-        int row_from_bottom = (int)(zero_norm * (draw_height - 1));
-        axis_screen_y = (y + draw_height - 1) - row_from_bottom;
+        int row_from_bottom = (int)std::round(zero_norm * (plot_height - 1));
+        axis_screen_y = (y + plot_height - 1) - row_from_bottom;
+        is_zero_axis = true;
       }
 
       for (int i = 0; i < draw_width; ++i) {
         Cell c;
         c.bg_color = bg;
         c.content = "─";
-        c.fg_color = axis;
+        c.fg_color = is_zero_axis ? zero_axis_col : axis;
         buffer.set(draw_x + i, axis_screen_y, c);
       }
 
-      // X Ticks
-      if (show_x_ticks && x_tick_count > 1) {
+      // X Ticks & Grid Lines
+      if (x_tick_count > 1) {
         for (int i = 0; i < x_tick_count; ++i) {
           int tick_x = draw_x + (draw_width - 1) * i / (x_tick_count - 1);
-          Cell c;
-          c.bg_color = bg;
-          c.content = "┼";
-          c.fg_color = axis;
-          buffer.set(tick_x, axis_screen_y, c);
+          if (show_x_ticks) {
+            Cell c;
+            c.bg_color = bg;
+            c.content = "┼";
+            c.fg_color = is_zero_axis ? zero_axis_col : axis;
+            buffer.set(tick_x, axis_screen_y, c);
+          }
+          if (show_grid_lines) {
+            for (int gy = 0; gy < plot_height; ++gy) {
+              int screen_gy = y + gy;
+              if (show_x_axis && screen_gy == axis_screen_y) continue;
+              if (show_y_axis && tick_x == (x + left_offset - 1)) continue;
+
+              const Cell &existing = buffer.get(tick_x, screen_gy);
+              Cell gc;
+              gc.bg_color = bg;
+              gc.fg_color = grid_col;
+              if (existing.content == "─") {
+                gc.content = "┼";
+              } else {
+                gc.content = "│";
+              }
+              buffer.set(tick_x, screen_gy, gc);
+            }
+          }
         }
       }
 
@@ -11012,6 +11472,39 @@ class ScatterChart : public ChartBase {
         }
 
         buffer.set(line_x, axis_screen_y, c);
+      }
+
+      // Draw vertical mathematical Y-axis line at x = 0.0
+      if (show_y_axis && x_min <= 0 && x_max >= 0 && x_max != x_min) {
+        double zero_norm = (0.0 - x_min) / (x_max - x_min);
+        int col_from_left = (int)std::round(zero_norm * (draw_width - 1));
+        int zero_x_screen = draw_x + col_from_left;
+
+        if (zero_x_screen >= draw_x && zero_x_screen < draw_x + draw_width) {
+          for (int gy = 0; gy < plot_height; ++gy) {
+            int screen_gy = y + gy;
+            // Skip the horizontal axis intersection point
+            if (show_x_axis && screen_gy == axis_screen_y) continue;
+            // Skip the left border Y-axis line
+            if (zero_x_screen == (x + left_offset - 1)) continue;
+
+            Cell c;
+            c.bg_color = bg;
+            c.content = "│";
+            c.fg_color = zero_axis_col;
+            buffer.set(zero_x_screen, screen_gy, c);
+          }
+
+          // Draw intersection of horizontal and vertical zero axes
+          if (show_x_axis && axis_screen_y >= y &&
+              axis_screen_y < y + plot_height) {
+            Cell c;
+            c.bg_color = bg;
+            c.content = "┼";
+            c.fg_color = zero_axis_col;
+            buffer.set(zero_x_screen, axis_screen_y, c);
+          }
+        }
       }
     }
 
@@ -11051,15 +11544,37 @@ class ScatterChart : public ChartBase {
     draw_height = plot_height;
     if (draw_height <= 0 || draw_width <= 0) return;
 
+    [[maybe_unused]] bool needs_braille = false;
     for (const auto &s : series) {
+      if (s.visible && s.use_braille) needs_braille = true;
+    }
+
+    bool use_braille_shared = needs_braille && Terminal::has_utf8();
+    std::unique_ptr<BrailleCanvas> shared_bc;
+    std::vector<std::vector<int>> cell_dot_counts;
+
+    if (use_braille_shared) {
+      shared_bc = std::make_unique<BrailleCanvas>(draw_width, draw_height);
+      cell_dot_counts.assign(draw_width * draw_height,
+                             std::vector<int>(series.size(), 0));
+    }
+
+    for (int s_idx = 0; s_idx < (int)series.size(); ++s_idx) {
+      const auto &s = series[s_idx];
+      if (s.points.empty()) continue;
+      if (!s.visible) continue;
+
       bool use_braille = s.use_braille;
       if (use_braille && !Terminal::has_utf8()) {
         use_braille = false;
       }
 
-      if (use_braille) {
-        BrailleCanvas bc(draw_width, draw_height);
+      Color draw_col = s.color;
+      if (hovered_series_idx_ != -1 && s_idx != hovered_series_idx_) {
+        draw_col = Theme::current().border;
+      }
 
+      if (use_braille && shared_bc) {
         // Helper map Y
         auto map_y = [&](double v) -> int {
           double norm = (v - y_min) / (y_max - y_min);
@@ -11067,7 +11582,7 @@ class ScatterChart : public ChartBase {
           if (norm > 1) norm = 1;
           // 4 sub-pixels per cell height
           int virtual_h = draw_height * 4;
-          int row_from_bottom = (int)(norm * (virtual_h - 1));
+          int row_from_bottom = (int)std::round(norm * (virtual_h - 1));
           return (virtual_h - 1) - row_from_bottom;
         };
 
@@ -11077,7 +11592,7 @@ class ScatterChart : public ChartBase {
           if (norm < 0) norm = 0;
           if (norm > 1) norm = 1;
           int virtual_w = draw_width * 2;
-          return (int)(norm * (virtual_w - 1));
+          return (int)std::round(norm * (virtual_w - 1));
         };
 
         for (int i = 0; i < (int)s.points.size(); ++i) {
@@ -11088,28 +11603,19 @@ class ScatterChart : public ChartBase {
 
           int vx = map_x(px);
           int vy = map_y(py);
-          bc.set_dot(vx, vy);
 
-          // Record Hit (approximate for Braille: map back to cell)
-          if (show_tooltip && draw_width > 0 && draw_height > 0) {
-            int hit_x = draw_x + vx / 2;
-            int hit_y = draw_y + vy / 4;
-            point_hits_.push_back(
-                {hit_x, hit_y, (int)(&s - &series[0]), i, px, py});
+          shared_bc->set_dot(vx, vy);
+          int cx = vx / 2;
+          int cy = vy / 4;
+          if (cx >= 0 && cx < draw_width && cy >= 0 && cy < draw_height) {
+            cell_dot_counts[cy * draw_width + cx][s_idx]++;
           }
-        }
 
-        // Blit BrailleCanvas to Buffer
-        for (int by = 0; by < draw_height; ++by) {
-          for (int bx = 0; bx < draw_width; ++bx) {
-            std::string bchar = bc.get_char(bx, by);
-            if (!bchar.empty()) {
-              Cell c;
-              c.content = bchar;
-              c.fg_color = s.color;
-              c.bg_color = bg;
-              buffer.set(draw_x + bx, draw_y + by, c);
-            }
+          // Record Hit
+          if (show_tooltip && draw_width > 0 && draw_height > 0) {
+            int hit_x = draw_x + cx;
+            int hit_y = draw_y + cy;
+            point_hits_.push_back({hit_x, hit_y, s_idx, i, px, py});
           }
         }
       } else {
@@ -11126,40 +11632,97 @@ class ScatterChart : public ChartBase {
           double norm_y = (py - y_min) / (y_max - y_min);
           if (norm_y < 0 || norm_y > 1) continue;
 
-          int screen_x = (int)(norm_x * (draw_width - 1));
-          int row_from_bottom = (int)(norm_y * (draw_height - 1));
+          int screen_x = (int)std::round(norm_x * (draw_width - 1));
+          int row_from_bottom = (int)std::round(norm_y * (draw_height - 1));
           int screen_y = (draw_height - 1) - row_from_bottom;
 
           Cell c;
           c.content = s.marker;
-          c.fg_color = s.color;
+          c.fg_color = draw_col;
           c.bg_color = bg;
           buffer.set(draw_x + screen_x, draw_y + screen_y, c);
 
           // Record Hit
           if (show_tooltip) {
-            point_hits_.push_back({draw_x + screen_x, draw_y + screen_y,
-                                   (int)(&s - &series[0]), i, px, py});
+            point_hits_.push_back(
+                {draw_x + screen_x, draw_y + screen_y, s_idx, i, px, py});
+          }
+        }
+      }
+    }
+
+    // Blit BrailleCanvas to Buffer if used
+    if (use_braille_shared && shared_bc) {
+      for (int by = 0; by < draw_height; ++by) {
+        for (int bx = 0; bx < draw_width; ++bx) {
+          std::string bchar = shared_bc->get_char(bx, by);
+          if (!bchar.empty() && bchar != " ") {
+            // Find dominant series index in this cell
+            int max_count = 0;
+            int best_idx = -1;
+            const auto &counts = cell_dot_counts[by * draw_width + bx];
+            for (size_t i = 0; i < series.size(); ++i) {
+              if (counts[i] > max_count) {
+                max_count = counts[i];
+                best_idx = i;
+              }
+            }
+
+            if (best_idx == -1) {
+              for (size_t i = 0; i < series.size(); ++i) {
+                if (series[i].visible && series[i].use_braille) {
+                  best_idx = i;
+                  break;
+                }
+              }
+            }
+
+            if (best_idx != -1) {
+              Color draw_col = series[best_idx].color;
+              if (hovered_series_idx_ != -1 &&
+                  best_idx != hovered_series_idx_) {
+                draw_col = Theme::current().border;
+              }
+
+              Cell c;
+              c.content = bchar;
+              c.fg_color = draw_col;
+              c.bg_color = bg;
+              buffer.set(draw_x + bx, draw_y + by, c);
+            }
           }
         }
       }
     }
 
     // 4. Draw Legend
+    legend_hits_.clear();
     if (show_legend) {
       int ly = y;
-      for (const auto &s : series) {
+      for (size_t s_idx = 0; s_idx < series.size(); ++s_idx) {
+        const auto &s = series[s_idx];
         if (s.label.empty()) continue;
         int legend_len = s.label.size();
         int lx = x + width - legend_len - 2;
         if (lx < x) lx = x;
+
+        Color leg_col = s.color;
+        if (!s.visible) {
+          leg_col = Theme::current().border;
+        } else if (hovered_series_idx_ != -1 &&
+                   (int)s_idx != hovered_series_idx_) {
+          leg_col = Theme::current().border;
+        }
+
         for (int i = 0; i < legend_len; ++i) {
           Cell c;
           c.bg_color = bg;
           c.content = std::string(1, s.label[i]);
-          c.fg_color = s.color;
+          c.fg_color = leg_col;
           buffer.set(lx + i, ly, c);
         }
+
+        legend_hits_.push_back({lx, ly, legend_len, (int)s_idx});
         ly++;
         if (ly >= y + height) break;
       }
@@ -11271,6 +11834,7 @@ class BarChart : public ChartBase {
     Color bg = bg_color.resolve(Theme::current().background);
     Color axis_col = axis_color.resolve(Theme::current().border);
     Color lbl_col = label_color.resolve(Theme::current().foreground);
+    Color grid_col = grid_color.resolve(Theme::current().border);
 
     if (series.empty() || categories.empty()) return;
 
@@ -11343,15 +11907,28 @@ class BarChart : public ChartBase {
         buffer.set(line_x, y + i, c);
       }
 
-      // Y Ticks
-      if (show_y_ticks && y_tick_count > 1) {
+      // Y Ticks & Grid Lines
+      if (y_tick_count > 1) {
         for (int i = 0; i < y_tick_count; ++i) {
           int tick_y = y + (content_height - 1) * i / (y_tick_count - 1);
-          Cell c;
-          c.bg_color = bg;
-          c.content = "┼";
-          c.fg_color = axis_col;
-          buffer.set(line_x, tick_y, c);
+          if (show_y_ticks) {
+            Cell c;
+            c.bg_color = bg;
+            c.content = "┼";
+            c.fg_color = axis_col;
+            buffer.set(line_x, tick_y, c);
+          }
+          if (show_grid_lines) {
+            int start_gx = x + left_offset;
+            int end_gx = x + width;
+            for (int gx = start_gx; gx < end_gx; ++gx) {
+              Cell gc;
+              gc.bg_color = bg;
+              gc.content = "─";
+              gc.fg_color = grid_col;
+              buffer.set(gx, tick_y, gc);
+            }
+          }
         }
       }
     }
@@ -11418,15 +11995,33 @@ class BarChart : public ChartBase {
       int group_width = num_series * final_bar_width;
       int group_start_x = slot_x + (slot_width - group_width) / 2;
 
-      // X Tick (between categories)
-      if (show_x_ticks && show_x_axis) {
-        int tick_x = slot_x + slot_width / 2;
-        if (tick_x < draw_x + draw_width) {
+      // X Tick (between categories) & Grid Lines
+      int tick_x = slot_x + slot_width / 2;
+      if (tick_x < draw_x + draw_width) {
+        if (show_x_ticks && show_x_axis) {
           Cell c;
           c.bg_color = bg;
           c.content = "┴";
           c.fg_color = axis_col;
           buffer.set(tick_x, axis_y, c);
+        }
+        if (show_grid_lines) {
+          for (int gy = 0; gy < content_height; ++gy) {
+            int screen_gy = y + gy;
+            if (show_x_axis && screen_gy == axis_y) continue;
+            if (show_y_axis && tick_x == (x + left_offset - 1)) continue;
+
+            const Cell &existing = buffer.get(tick_x, screen_gy);
+            Cell gc;
+            gc.bg_color = bg;
+            gc.fg_color = grid_col;
+            if (existing.content == "─") {
+              gc.content = "┼";
+            } else {
+              gc.content = "│";
+            }
+            buffer.set(tick_x, screen_gy, gc);
+          }
         }
       }
 
@@ -12094,16 +12689,21 @@ class ProportionalBar : public Widget {
     for (size_t i = 0; i < segments.size() && bar_y < y + height - 1; ++i) {
       const auto &seg = segments[i];
       double pct = seg.value / total;
-      int seg_width = std::max(1, (int)(pct * bar_width));
 
-      for (int j = 0; j < seg_width && pie_x + j < x + width - 15; ++j) {
+      int start_col = (int)(acc * bar_width);
+      acc += pct;
+      int end_col = (int)(acc * bar_width);
+      int seg_width = end_col - start_col;
+      if (seg_width < 1) seg_width = 1;
+
+      for (int j = 0; j < seg_width && pie_x + start_col + j < x + width - 15;
+           ++j) {
         Cell c;
         c.content = "█";
         c.fg_color = seg.color;
         c.bg_color = bg;
-        buffer.set(pie_x + (int)(acc * bar_width) + j, bar_y, c);
+        buffer.set(pie_x + start_col + j, bar_y, c);
       }
-      acc += pct;
     }
 
     // Legend
@@ -12153,6 +12753,361 @@ class ProportionalBar : public Widget {
         legend_y++;
       }
     }
+  }
+};
+
+/// @brief Circular Pie and Donut chart widget supporting Braille subpixel
+/// rendering and character block fallbacks
+class PieChart : public Widget {
+ public:
+  struct Segment {
+    double value;
+    std::string label;
+    Color color;
+  };
+
+  std::vector<Segment> segments;  ///< Proportional chart segments
+  bool show_legend = true;        ///< Show the segment labels side legend
+  bool show_percentages =
+      true;            ///< Display segment share percentage next to labels
+  bool donut = false;  ///< Render as a donut chart with a central hole
+  double inner_radius_ratio =
+      0.4;  ///< Ratio of the donut central hole radius (0.0 to 1.0)
+  double aspect_ratio =
+      2.0;  ///< Horizontal stretch ratio for character block fallback
+  double radius_scale =
+      1.0;  ///< Circle radius scaling factor inside widget footprint
+
+  void add_segment(double val, const std::string &label, Color col) {
+    segments.push_back({val, label, col});
+  }
+
+  void render(Buffer &buffer) override {
+    Color bg = bg_color.resolve(Theme::current().background);
+    if (segments.empty()) return;
+
+    double total = 0.0;
+    for (const auto &s : segments) total += s.value;
+    if (total <= 0.0) return;
+
+    // Define bounds for the circle
+    int legend_width = show_legend ? 20 : 0;
+    const double PI = 3.14159265358979323846;
+    int circle_width = 0;
+
+    bool use_braille = Terminal::has_utf8();
+
+    if (use_braille) {
+      int max_radius_vx = (width - legend_width) * 2 / 2 - 2;
+      int radius_v = std::min(height * 2 - 2, max_radius_vx);
+      if (radius_v < 4) radius_v = 4;
+
+      circle_width = (radius_v / 2) * 2 + 4;  // Bounding box cells
+      int virtual_w = circle_width * 2;
+      int virtual_h = height * 4;
+
+      int center_vx = virtual_w / 2;
+      int center_vy = virtual_h / 2;
+
+      double r_outer = radius_v * radius_scale;
+      double r_inner = donut ? r_outer * inner_radius_ratio : 0.0;
+
+      BrailleCanvas bc(circle_width, height);
+
+      // Track segment counts per cell to resolve cell colors
+      struct CellColorTracker {
+        std::vector<int> counts;
+      };
+      std::vector<CellColorTracker> color_trackers(circle_width * height);
+      for (auto &t : color_trackers) t.counts.assign(segments.size(), 0);
+
+      for (int vy = 0; vy < virtual_h; ++vy) {
+        for (int vx = 0; vx < virtual_w; ++vx) {
+          double dx = vx - center_vx;
+          double dy = vy - center_vy;
+          double dist = std::sqrt(dx * dx + dy * dy);
+
+          if (dist <= r_outer && dist >= r_inner) {
+            double angle = std::atan2(dy, dx);
+            if (angle < 0) angle += 2.0 * PI;
+
+            // Find matching segment
+            double acc = 0.0;
+            int matched_idx = -1;
+            for (size_t i = 0; i < segments.size(); ++i) {
+              double seg_start = 2.0 * PI * (acc / total);
+              acc += segments[i].value;
+              double seg_end = 2.0 * PI * (acc / total);
+              if (angle >= seg_start && angle < seg_end) {
+                matched_idx = i;
+                break;
+              }
+            }
+
+            if (matched_idx != -1) {
+              bc.set_dot(vx, vy);
+              int cx = vx / 2;
+              int cy = vy / 4;
+              if (cx >= 0 && cx < circle_width && cy >= 0 && cy < height) {
+                color_trackers[cy * circle_width + cx].counts[matched_idx]++;
+              }
+            }
+          }
+        }
+      }
+
+      // Blit Braille Canvas to buffer
+      for (int cy = 0; cy < height; ++cy) {
+        for (int cx = 0; cx < circle_width; ++cx) {
+          std::string bchar = bc.get_char(cx, cy);
+          if (!bchar.empty() && bchar != " ") {
+            // Find dominant segment color in this cell
+            int max_count = 0;
+            int best_idx = 0;
+            const auto &tracker = color_trackers[cy * circle_width + cx];
+            for (size_t i = 0; i < segments.size(); ++i) {
+              if (tracker.counts[i] > max_count) {
+                max_count = tracker.counts[i];
+                best_idx = i;
+              }
+            }
+
+            Cell c;
+            c.content = bchar;
+            c.fg_color = segments[best_idx].color;
+            c.bg_color = bg;
+            buffer.set(x + cx, y + cy, c);
+          }
+        }
+      }
+    } else {
+      // Fallback: Block rendering
+      int max_radius_x = (width - legend_width) / 2 - 1;
+      int radius_x = std::min(height - 1, max_radius_x);
+      if (radius_x < 2) radius_x = 2;
+
+      int center_x = radius_x + 2;
+      int center_y = height / 2;
+
+      double r_outer = radius_x * radius_scale;
+      double r_inner = donut ? r_outer * inner_radius_ratio : 0.0;
+      circle_width = radius_x * 2 + 4;  // Bounding box width
+
+      for (int sy = 0; sy < height; ++sy) {
+        for (int sx = 0; sx < circle_width; ++sx) {
+          double dx = sx - center_x;
+          double dy = (sy - center_y) * aspect_ratio;
+          double dist = std::sqrt(dx * dx + dy * dy);
+
+          if (dist <= r_outer && dist >= r_inner) {
+            double angle = std::atan2(dy, dx);
+            if (angle < 0) angle += 2.0 * PI;
+
+            // Find matching segment
+            double acc = 0.0;
+            int matched_idx = -1;
+            for (size_t i = 0; i < segments.size(); ++i) {
+              double seg_start = 2.0 * PI * (acc / total);
+              acc += segments[i].value;
+              double seg_end = 2.0 * PI * (acc / total);
+              if (angle >= seg_start && angle < seg_end) {
+                matched_idx = i;
+                break;
+              }
+            }
+
+            if (matched_idx != -1) {
+              Cell c;
+              c.content = "█";
+              c.fg_color = segments[matched_idx].color;
+              c.bg_color = bg;
+              buffer.set(x + sx, y + sy, c);
+            }
+          }
+        }
+      }
+    }
+
+    // Draw Legend right next to the circle
+    if (show_legend && legend_width > 0) {
+      int legend_x = x + circle_width + 4;
+      int legend_y = y + (height - (int)segments.size()) / 2;
+      if (legend_y < y) legend_y = y;
+
+      for (const auto &seg : segments) {
+        if (legend_y >= y + height) break;
+
+        Cell marker;
+        marker.content = "■";
+        marker.fg_color = seg.color;
+        marker.bg_color = bg;
+        buffer.set(legend_x, legend_y, marker);
+
+        std::string lbl = " " + seg.label;
+        if (show_percentages) {
+          char pct[16];
+          snprintf(pct, sizeof(pct), " %.1f%%", (seg.value / total) * 100);
+          lbl += pct;
+        }
+
+        // Render label text safely
+        int cell_x = 0;
+        size_t pos = 0;
+        while (pos < lbl.size() && legend_x + 1 + cell_x < x + width) {
+          uint32_t codepoint;
+          int byte_len;
+          if (utf8_decode_codepoint(lbl, pos, codepoint, byte_len)) {
+            Cell c;
+            c.content = lbl.substr(pos, byte_len);
+            c.fg_color = Theme::current().foreground;
+            c.bg_color = bg;
+            buffer.set(legend_x + 1 + cell_x, legend_y, c);
+            int dw = char_display_width(codepoint);
+            cell_x += (dw > 0 ? dw : 1);
+            pos += byte_len;
+          } else {
+            pos++;
+          }
+        }
+        legend_y++;
+      }
+    }
+  }
+};
+
+/// @brief Box and Whisker Plot for statistical distributions
+class BoxWhiskerPlot : public Widget {
+ public:
+  double min_val = 0.0;     ///< Minimum data value
+  double q1_val = 0.0;      ///< First quartile (25th percentile) value
+  double median_val = 0.0;  ///< Median (50th percentile) value
+  double q3_val = 0.0;      ///< Third quartile (75th percentile) value
+  double max_val = 0.0;     ///< Maximum data value
+
+  double range_min = 0.0;  ///< Fixed scale minimum when auto_scale is false
+  double range_max = 1.0;  ///< Fixed scale maximum when auto_scale is false
+  bool auto_scale = true;  ///< Auto-scale plot bounds based on min/max data
+
+  Color box_color =
+      Color();  ///< Custom color for the IQR box (default primary)
+  Color whisker_color =
+      Color();  ///< Custom color for the whiskers and caps (default foreground)
+  Color median_color =
+      Color();  ///< Custom color for the median line (default secondary)
+
+  std::string label;  ///< Optional descriptive label shown next to the plot
+
+  BoxWhiskerPlot() { fixed_height = 3; }
+
+  /// @brief Set the statistical data points for the box-whisker plot
+  /// @param min Minimum value
+  /// @param q1 First quartile value
+  /// @param med Median value
+  /// @param q3 Third quartile value
+  /// @param max Maximum value
+  void set_data(double min, double q1, double med, double q3, double max) {
+    min_val = min;
+    q1_val = q1;
+    median_val = med;
+    q3_val = q3;
+    max_val = max;
+  }
+
+  void render(Buffer &buffer) override {
+    Color bg = bg_color.resolve(Theme::current().background);
+    Color box_col = box_color.is_default ? Theme::current().primary : box_color;
+    Color whisker_col =
+        whisker_color.is_default ? Theme::current().foreground : whisker_color;
+    Color median_col =
+        median_color.is_default ? Theme::current().secondary : median_color;
+
+    double actual_min = range_min;
+    double actual_max = range_max;
+    if (auto_scale) {
+      actual_min = min_val;
+      actual_max = max_val;
+    }
+
+    if (actual_max == actual_min) {
+      actual_max += 1.0;
+      actual_min -= 1.0;
+    }
+
+    int left_offset = label.empty() ? 2 : (int)label.size() + 2;
+    int plot_width = width - left_offset - 2;
+    if (plot_width < 10) return;
+
+    int draw_x = x + left_offset;
+    int draw_y = y;
+
+    auto map_val = [&](double val) -> int {
+      double norm = (val - actual_min) / (actual_max - actual_min);
+      if (norm < 0) norm = 0;
+      if (norm > 1) norm = 1;
+      return draw_x + (int)std::round(norm * (plot_width - 1));
+    };
+
+    int c_min = map_val(min_val);
+    int c_q1 = map_val(q1_val);
+    int c_med = map_val(median_val);
+    int c_q3 = map_val(q3_val);
+    int c_max = map_val(max_val);
+
+    // 1. Draw Label
+    if (!label.empty()) {
+      int label_x = x;
+      int label_y = y + 1;
+      for (size_t i = 0; i < label.size() && label_x + (int)i < draw_x; ++i) {
+        Cell c;
+        c.content = std::string(1, label[i]);
+        c.fg_color = Theme::current().foreground;
+        c.bg_color = bg;
+        buffer.set(label_x + i, label_y, c);
+      }
+    }
+
+    // 2. Draw Top of Box
+    if (c_q3 > c_q1) {
+      buffer.set(c_q1, draw_y, {"┌", box_col, bg});
+      buffer.set(c_q3, draw_y, {"┐", box_col, bg});
+      for (int col = c_q1 + 1; col < c_q3; ++col) {
+        buffer.set(col, draw_y, {"─", box_col, bg});
+      }
+    }
+
+    // 3. Draw Bottom of Box
+    if (c_q3 > c_q1) {
+      buffer.set(c_q1, draw_y + 2, {"└", box_col, bg});
+      buffer.set(c_q3, draw_y + 2, {"┘", box_col, bg});
+      for (int col = c_q1 + 1; col < c_q3; ++col) {
+        buffer.set(col, draw_y + 2, {"─", box_col, bg});
+      }
+    }
+
+    // 4. Draw Middle Row (Whiskers, Median, Box Interior)
+    // Draw whiskers
+    for (int col = c_min; col < c_q1; ++col) {
+      buffer.set(col, draw_y + 1, {"─", whisker_col, bg});
+    }
+    for (int col = c_q3 + 1; col <= c_max; ++col) {
+      buffer.set(col, draw_y + 1, {"─", whisker_col, bg});
+    }
+    // Whisker caps
+    buffer.set(c_min, draw_y + 1, {"│", whisker_col, bg});
+    buffer.set(c_max, draw_y + 1, {"│", whisker_col, bg});
+
+    // Box sides
+    buffer.set(c_q1, draw_y + 1, {"│", box_col, bg});
+    buffer.set(c_q3, draw_y + 1, {"│", box_col, bg});
+
+    // Box interior shading
+    for (int col = c_q1 + 1; col < c_q3; ++col) {
+      if (col == c_med) continue;
+      buffer.set(col, draw_y + 1, {"░", box_col, bg});
+    }
+
+    // Median line
+    buffer.set(c_med, draw_y + 1, {"┃", median_col, bg});
   }
 };
 
@@ -12489,9 +13444,81 @@ class Heatmap : public Widget {
   Color low_color = Color(0, 0, 128);
   Color high_color = Color(255, 0, 0);
 
+  // Tooltip Support
+  bool show_tooltip = false;
+  int tooltip_duration_ms = 1000;
+  std::chrono::steady_clock::time_point last_hit_time_;
+  std::function<std::string(int, int, double)> tooltip_formatter;
+
+  struct HeatmapHit {
+    int x, y;
+    int width, height;
+    int row_index;
+    int col_index;
+    double value;
+  };
+  mutable std::vector<HeatmapHit> heatmap_hits_;
+
+  bool on_event(const Event &event) override {
+    if (!show_tooltip) return false;
+
+    if (event.is_mouse_event()) {
+      if (event.mouse_wheel()) return false;
+      bool hit_found = false;
+
+      if (contains(event.x, event.y)) {
+        for (const auto &hit : heatmap_hits_) {
+          if (event.x >= hit.x && event.x < hit.x + hit.width &&
+              event.y >= hit.y && event.y < hit.y + hit.height) {
+            std::string text;
+            if (tooltip_formatter) {
+              text = tooltip_formatter(hit.row_index, hit.col_index, hit.value);
+            } else {
+              std::stringstream ss;
+              ss << std::fixed << std::setprecision(2) << hit.value;
+              std::string r_lbl = (hit.row_index < (int)row_labels.size())
+                                      ? row_labels[hit.row_index].plain_text()
+                                      : std::to_string(hit.row_index);
+              std::string c_lbl = (hit.col_index < (int)col_labels.size())
+                                      ? col_labels[hit.col_index].plain_text()
+                                      : std::to_string(hit.col_index);
+              text = r_lbl + ", " + c_lbl + ": " + ss.str();
+            }
+
+            if (!tooltip_) tooltip_ = std::make_shared<Tooltip>();
+
+            tooltip_->text = text;
+            tooltip_->position = Tooltip::Position::Manual;
+            tooltip_->manual_x = event.x;
+            tooltip_->manual_y = event.y - 1;
+            tooltip_->visible = true;
+
+            hit_found = true;
+            last_hit_time_ = std::chrono::steady_clock::now();
+            return true;
+          }
+        }
+      }
+
+      if (!hit_found) {
+        if (tooltip_) {
+          auto now = std::chrono::steady_clock::now();
+          auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             now - last_hit_time_)
+                             .count();
+          if (elapsed >= tooltip_duration_ms) {
+            tooltip_ = nullptr;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
   void set_data(const std::vector<std::vector<double>> &d) { data = d; }
 
   void render(Buffer &buffer) override {
+    if (show_tooltip) heatmap_hits_.clear();
     Color bg = bg_color.resolve(Theme::current().background);
 
     if (data.empty()) return;
@@ -12550,6 +13577,12 @@ class Heatmap : public Widget {
         double val = data[r][c_idx];
         if (val < 0) val = 0;
         if (val > 1) val = 1;
+
+        if (show_tooltip) {
+          heatmap_hits_.push_back({x + label_width + c_idx * cell_w,
+                                   y + r * cell_h, cell_w, cell_h, r, c_idx,
+                                   val});
+        }
 
         // Interpolate color
         uint8_t cr =

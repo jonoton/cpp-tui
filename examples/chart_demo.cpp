@@ -55,14 +55,14 @@ int main() {
   scroll->add(line_title);
 
   auto line_chart = std::make_shared<LineChart>();
-  line_chart->min_val = -1.5;
-  line_chart->max_val = 1.5;
   line_chart->show_legend = true;
   line_chart->show_y_axis = true;
   line_chart->show_x_axis = true;
   line_chart->show_y_tick_labels = true;
   line_chart->show_y_ticks = true;
   line_chart->show_x_ticks = true;
+  line_chart->show_grid_lines = true;
+  line_chart->auto_scale = true;
   line_chart->y_tick_count = 3;
   line_chart->x_tick_count = 5;
   line_chart->y_tick_precision = 2;
@@ -98,6 +98,8 @@ int main() {
   scatter_chart->show_y_tick_labels = true;
   scatter_chart->show_x_ticks = true;
   scatter_chart->show_y_ticks = true;
+  scatter_chart->show_grid_lines = true;
+  scatter_chart->auto_scale = false;
   scatter_chart->x_tick_count = 5;
   scatter_chart->y_tick_count = 5;
   scatter_chart->x_tick_precision = 1;
@@ -122,6 +124,7 @@ int main() {
   bar_chart->show_y_tick_labels = true;
   bar_chart->show_y_ticks = true;
   bar_chart->show_x_ticks = true;
+  bar_chart->show_grid_lines = true;
   bar_chart->y_tick_count = 4;
   bar_chart->y_tick_formatter = [](double val) -> std::string {
     return "$" + std::to_string((int)val);
@@ -170,6 +173,19 @@ int main() {
   pie_chart->fixed_height = 5;
   scroll->add(pie_chart);
 
+  // 5b. Circular Pie / Donut Chart (NEW)
+  scroll->add(std::make_shared<VerticalSpacer>(1));
+  auto circular_pie_title = std::make_shared<Label>(
+      "Circular Donut Chart (Animated - Size Oscillates to Demo Scaling)",
+      Color::Yellow());
+  circular_pie_title->fixed_height = 1;
+  scroll->add(circular_pie_title);
+
+  auto circular_pie = std::make_shared<PieChart>();
+  circular_pie->donut = true;
+  circular_pie->fixed_height = 10;
+  scroll->add(circular_pie);
+
   // 6. Heatmap (NEW)
   scroll->add(std::make_shared<VerticalSpacer>(1));
   auto heatmap_title = std::make_shared<Label>(
@@ -186,15 +202,62 @@ int main() {
                    {0.3, 0.5, 0.8, 0.7, 0.5, 0.2},
                    {0.1, 0.2, 0.6, 0.5, 0.3, 0.1}};
   heatmap->fixed_height = 5;
+  heatmap->show_tooltip = true;
   scroll->add(heatmap);
+
+  // 7. Enhanced Sparkline (NEW)
+  scroll->add(std::make_shared<VerticalSpacer>(1));
+  auto spark_title = std::make_shared<Label>(
+      "Enhanced Sparkline (Multi-Line, Auto-Scale, Thresholds - Animated)",
+      Color::Cyan());
+  spark_title->fixed_height = 1;
+  scroll->add(spark_title);
+
+  auto sparkline = std::make_shared<Sparkline>();
+  sparkline->height = 3;
+  sparkline->fixed_height = 3;
+  sparkline->auto_scale = true;
+  sparkline->show_label = true;
+  sparkline->label_format = " %.2f";
+  sparkline->color_thresholds = {{0.5f, Color::Yellow()}, {0.8f, Color::Red()}};
+  scroll->add(sparkline);
+
+  // 8. Box and Whisker Plot (NEW)
+  scroll->add(std::make_shared<VerticalSpacer>(1));
+  auto box_title = std::make_shared<Label>(
+      "Box & Whisker Plot (Statistical Distributions - Animated)",
+      Color::Yellow());
+  box_title->fixed_height = 1;
+  scroll->add(box_title);
+
+  auto box_plot = std::make_shared<BoxWhiskerPlot>();
+  box_plot->label = "Latency";
+  box_plot->box_color = Theme::current().primary;
+  box_plot->whisker_color = Theme::current().foreground;
+  box_plot->median_color = Theme::current().secondary;
+  scroll->add(box_plot);
 
   root->add(scroll);
 
   // Animation Logic
   double time = 0;
-  app.add_timer(50, [line_chart, scatter_chart, gauge, pie_chart, heatmap,
-                     &time]() {
+  app.add_timer(50, [line_chart, scatter_chart, gauge, pie_chart, circular_pie,
+                     heatmap, sparkline, box_plot, &time]() {
     time += 0.1;
+
+    Color bg = Theme::current().background;
+    Color pri = Theme::current().primary;
+    Color sec = Theme::current().secondary;
+    Color succ = Theme::current().success;
+    Color warn = Theme::current().warning;
+
+    // Blend: 70% background, 30% primary/secondary
+    Color fill_pri((uint8_t)(bg.r * 0.7 + pri.r * 0.3),
+                   (uint8_t)(bg.g * 0.7 + pri.g * 0.3),
+                   (uint8_t)(bg.b * 0.7 + pri.b * 0.3));
+    Color fill_sec((uint8_t)(bg.r * 0.7 + sec.r * 0.3),
+                   (uint8_t)(bg.g * 0.7 + sec.g * 0.3),
+                   (uint8_t)(bg.b * 0.7 + sec.b * 0.3));
 
     // Update Line Chart
     std::vector<double> sin_data, cos_data;
@@ -203,10 +266,15 @@ int main() {
       cos_data.push_back(std::cos(time + i * 0.2));
     }
     line_chart->series.clear();
-    line_chart->add_series(sin_data, "Sin (Braille)", {0, 255, 255},
+    line_chart->add_series(sin_data, "Sin (Braille)", pri,
                            LineChart::LineStyle::Braille);
-    line_chart->add_series(cos_data, "Cos (Lines)", {255, 0, 255},
+    line_chart->add_series(cos_data, "Cos (Lines)", sec,
                            LineChart::LineStyle::Lines, "#");
+    line_chart->series[0].fill = true;
+    line_chart->series[0].fill_color = fill_pri;
+    line_chart->series[1].fill = true;
+    line_chart->series[1].fill_char = "░";
+    line_chart->series[1].fill_color = fill_sec;
 
     // Update Scatter Chart
     std::vector<std::pair<double, double>> planets, comets;
@@ -217,9 +285,8 @@ int main() {
     comets.push_back({std::cos(time * 2.0) * 1.8, std::sin(time * 2.0) * 0.5});
 
     scatter_chart->series.clear();
-    scatter_chart->add_series(planets, "Planets (Braille)", {255, 255, 0}, "*",
-                              true);
-    scatter_chart->add_series(comets, "Comet (Char)", {0, 255, 0}, "+", false);
+    scatter_chart->add_series(planets, "Planets (Braille)", pri, "*", true);
+    scatter_chart->add_series(comets, "Comet (Char)", sec, "+", false);
 
     // Update Gauge (oscillating CPU usage)
     gauge->value = 0.5 + 0.4 * std::sin(time * 0.5);
@@ -227,10 +294,18 @@ int main() {
     // Update ProportionalBar (shifting market share)
     double shift = std::sin(time * 0.3) * 10;
     pie_chart->segments.clear();
-    pie_chart->add_segment(45 + shift, "Chrome", Color::Blue());
-    pie_chart->add_segment(30 - shift * 0.5, "Firefox", Color::Red());
-    pie_chart->add_segment(15 + shift * 0.3, "Safari", Color::Cyan());
-    pie_chart->add_segment(10 - shift * 0.2, "Other", Color::Green());
+    pie_chart->add_segment(45 + shift, "Chrome", pri);
+    pie_chart->add_segment(30 - shift * 0.5, "Firefox", sec);
+    pie_chart->add_segment(15 + shift * 0.3, "Safari", succ);
+    pie_chart->add_segment(10 - shift * 0.2, "Other", warn);
+
+    // Update Circular Pie / Donut
+    circular_pie->segments.clear();
+    circular_pie->add_segment(45 + shift, "Chrome", pri);
+    circular_pie->add_segment(30 - shift * 0.5, "Firefox", sec);
+    circular_pie->add_segment(15 + shift * 0.3, "Safari", succ);
+    circular_pie->add_segment(10 - shift * 0.2, "Other", warn);
+    circular_pie->radius_scale = 0.8 + 0.2 * std::sin(time * 0.5);
 
     // Update Heatmap (wave pattern)
     for (size_t r = 0; r < heatmap->data.size(); ++r) {
@@ -239,6 +314,16 @@ int main() {
         heatmap->data[r][c] = 0.5 + 0.5 * wave;
       }
     }
+
+    // Update Sparkline
+    static std::vector<float> spark_data;
+    spark_data.push_back(0.5f + 0.45f * std::sin(time * 0.8f));
+    if (spark_data.size() > 80) spark_data.erase(spark_data.begin());
+    sparkline->data = spark_data;
+
+    // Update Box Plot (oscillating median and quartiles)
+    double med = 50.0 + 10.0 * std::sin(time * 0.5);
+    box_plot->set_data(10.0, 35.0, med, 70.0, 95.0);
   });
 
   app.run(root);
