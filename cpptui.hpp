@@ -3422,9 +3422,14 @@ class Paragraph : public Widget {
       int pos = 0;
       for (const auto &span : styled_content.spans()) {
         span_map.push_back({pos, &span});
-        pos += (int)span.text.length();
+        pos += (int)TextHelper::prepare_text_for_render(span.text).size();
       }
     }
+
+    // Pre-compute visual chars of the original plain text so we can
+    // distinguish actual newlines from word-wrap line breaks.
+    auto plain_chars = TextHelper::prepare_text_for_render(plain);
+    int plain_visual_len = (int)plain_chars.size();
 
     auto get_span_at = [&](int pos) -> const TextSpan * {
       for (int i = (int)span_map.size() - 1; i >= 0; --i) {
@@ -3493,7 +3498,14 @@ class Paragraph : public Widget {
           buffer.set(sx, sy, empty);
         }
       }
-      char_in_plain_offset += (int)line.length() + 1;  // +1 for newline
+      char_in_plain_offset += (int)chars.size();
+      // Only advance past a newline if the original text actually has
+      // one at this position. Word-wrap line breaks don't have a
+      // corresponding newline in the original text.
+      if (char_in_plain_offset < plain_visual_len &&
+          plain_chars[char_in_plain_offset].content == "\n") {
+        char_in_plain_offset += 1;
+      }
     }
   }
 
@@ -3562,6 +3574,11 @@ class Paragraph : public Widget {
       while (std::getline(stream, line)) lines.push_back(line);
     }
 
+    // Pre-compute visual chars of the original plain text so we can
+    // distinguish actual newlines from word-wrap line breaks.
+    auto plain_chars = TextHelper::prepare_text_for_render(plain);
+    int plain_visual_len = (int)plain_chars.size();
+
     int char_offset = 0;
     int rel_y = vy - y;
     if (rel_y < 0) return 0;
@@ -3579,9 +3596,16 @@ class Paragraph : public Widget {
         }
         return char_offset + (int)chars.size();
       }
-      char_offset += (int)lines[i].length() + 1;
+      char_offset += (int)chars.size();
+      // Only advance past a newline if the original text actually has
+      // one at this position. Word-wrap line breaks don't have a
+      // corresponding newline in the original text.
+      if (char_offset < plain_visual_len &&
+          plain_chars[char_offset].content == "\n") {
+        char_offset += 1;
+      }
     }
-    return (int)plain.length();
+    return plain_visual_len;
   }
 
   void select_word_at(int pos) {
@@ -3842,9 +3866,14 @@ class TextList : public Widget {
         int pos = 0;
         for (const auto &span : item.styled_text.spans()) {
           span_map.push_back({pos, &span});
-          pos += (int)span.text.length();
+          pos += (int)TextHelper::prepare_text_for_render(span.text).size();
         }
       }
+      // Pre-compute visual chars of the item text so we can
+      // distinguish actual newlines from word-wrap line breaks.
+      auto item_chars = TextHelper::prepare_text_for_render(item.text);
+      int item_visual_len = (int)item_chars.size();
+
       auto get_span_at = [&](int pos) -> const TextSpan * {
         for (int j = (int)span_map.size() - 1; j >= 0; --j) {
           if (pos >= span_map[j].first) return span_map[j].second;
@@ -3933,9 +3962,16 @@ class TextList : public Widget {
           t_vx += chars[ci].display_width;
         }
         line_offset++;
-        item_char_offset += (int)lines[li].length() + 1;
+        item_char_offset += (int)chars.size();
+      // Only advance past a newline if the original text actually has
+      // one at this position. Word-wrap line breaks don't have a
+      // corresponding newline in the original text.
+      if (item_char_offset < item_visual_len &&
+          item_chars[item_char_offset].content == "\n") {
+        item_char_offset += 1;
       }
-      char_in_full_text_offset += (int)item.text.length() + 1;
+      }
+      char_in_full_text_offset += item_visual_len + 1;
     }
 
     // Fill remaining lines
@@ -4050,16 +4086,21 @@ class TextList : public Widget {
       else
         lines = {item.text};
 
+      // Pre-compute visual chars of the item text so we can
+      // distinguish actual newlines from word-wrap line breaks.
+      auto item_chars = TextHelper::prepare_text_for_render(item.text);
+      int item_visual_len = (int)item_chars.size();
+
       int item_char_offset = 0;
       for (int li = 0; li < (int)lines.size(); ++li) {
         int cur_y = y + line_offset;
+        auto chars = TextHelper::prepare_text_for_render(lines[li]);
         if (vy == cur_y) {
           int cur_indent =
               base_indent + marker_width + (li == 0 ? 0 : wrap_indent);
           int rel_x = vx - x - cur_indent;
           if (rel_x < 0) return char_in_full_text_offset + item_char_offset;
 
-          auto chars = TextHelper::prepare_text_for_render(lines[li]);
           int t_vx = 0;
           for (int ci = 0; ci < (int)chars.size(); ++ci) {
             if (rel_x < t_vx + chars[ci].display_width / 2)
@@ -4070,11 +4111,18 @@ class TextList : public Widget {
                  (int)chars.size();
         }
         line_offset++;
-        item_char_offset += (int)lines[li].length() + 1;
+        item_char_offset += (int)chars.size();
+        // Only advance past a newline if the original text actually has
+        // one at this position. Word-wrap line breaks don't have a
+        // corresponding newline in the original text.
+        if (item_char_offset < item_visual_len &&
+            item_chars[item_char_offset].content == "\n") {
+          item_char_offset += 1;
+        }
       }
-      char_in_full_text_offset += (int)item.text.length() + 1;
+      char_in_full_text_offset += item_visual_len + 1;
     }
-    return (int)get_full_text().length();
+    return char_in_full_text_offset > 0 ? char_in_full_text_offset - 1 : 0;
   }
 
   void select_word_at(int pos) {
