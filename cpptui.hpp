@@ -3614,7 +3614,7 @@ class Paragraph : public Widget {
         int rel_x = vx - x - indent;
         int cur_vx = 0;
         for (int j = 0; j < (int)chars.size(); ++j) {
-          if (rel_x < cur_vx + chars[j].display_width / 2)
+          if (rel_x < cur_vx + (chars[j].display_width + 1) / 2)
             return char_offset + j;
           cur_vx += chars[j].display_width;
         }
@@ -4121,7 +4121,7 @@ class TextList : public Widget {
 
           int t_vx = 0;
           for (int ci = 0; ci < (int)chars.size(); ++ci) {
-            if (rel_x < t_vx + chars[ci].display_width / 2)
+            if (rel_x < t_vx + (chars[ci].display_width + 1) / 2)
               return char_in_full_text_offset + item_char_offset + ci;
             t_vx += chars[ci].display_width;
           }
