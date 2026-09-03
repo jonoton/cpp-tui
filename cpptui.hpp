@@ -1989,7 +1989,11 @@ class Terminal {
 
   /// @brief Write raw string data to the terminal output
   /// @param data The string to write
-  void write(const std::string &data) { std::cout << data; }
+  void write(const std::string &data) {
+    if (!data.empty()) {
+      std::cout << data;
+    }
+  }
 
   /// @brief Flush the output stream
   void flush() { std::cout.flush(); }
@@ -3170,7 +3174,7 @@ class Static : public Widget {
     if (has_focus() && event.is_key_event()) {
       if (event.is_select_all()) {
         selection_state_.start = 0;
-        selection_state_.end = (int)text_.length();
+        selection_state_.end = (int)TextHelper::count_codepoints(text_);
         return true;
       }
       if (event.is_copy()) {
@@ -3187,7 +3191,7 @@ class Static : public Widget {
     if (!has_selection()) return "";
     int s, e;
     selection_state_.get_range(s, e);
-    return text_.substr(s, e - s);
+    return TextHelper::utf8_substr(text_, s, e - s);
   }
 
   bool is_char_selected(int char_idx) const {
@@ -3298,7 +3302,7 @@ class Label : public Widget {
     if (has_focus() && event.is_key_event()) {
       if (event.is_select_all()) {
         selection_state_.start = 0;
-        selection_state_.end = (int)text_.length();
+        selection_state_.end = (int)TextHelper::count_codepoints(text_);
         return true;
       }
       if (event.is_copy()) {
@@ -3563,7 +3567,7 @@ class Paragraph : public Widget {
     if (has_focus() && event.is_key_event()) {
       if (event.is_select_all()) {
         selection_state_.start = 0;
-        selection_state_.end = (int)text.length();
+        selection_state_.end = (int)TextHelper::count_codepoints(text);
         return true;
       }
       if (event.is_copy()) {
@@ -3581,7 +3585,7 @@ class Paragraph : public Widget {
     if (!has_selection()) return "";
     int s, e;
     selection_state_.get_range(s, e);
-    return text.substr(s, e - s);
+    return TextHelper::utf8_substr(text, s, e - s);
   }
 
   int visual_to_char_idx(int vx, int vy) const {
@@ -4041,7 +4045,7 @@ class TextList : public Widget {
     if (has_focus() && event.is_key_event()) {
       if (event.is_select_all()) {
         selection_state_.start = 0;
-        selection_state_.end = (int)get_full_text().length();
+        selection_state_.end = (int)TextHelper::count_codepoints(get_full_text());
         return true;
       }
       if (event.is_copy()) {
@@ -4065,7 +4069,7 @@ class TextList : public Widget {
     int s, e;
     selection_state_.get_range(s, e);
     std::string plain = get_full_text();
-    return plain.substr(s, e - s);
+    return TextHelper::utf8_substr(plain, s, e - s);
   }
 
  private:
@@ -16634,6 +16638,11 @@ class App {
             } else if (auto para = std::dynamic_pointer_cast<Paragraph>(
                            focused_widget_)) {
               if (para->selectable && para->has_selection())
+                handled_as_copy = true;
+            } else if (auto tlist =
+                           std::dynamic_pointer_cast<TextList>(
+                               focused_widget_)) {
+              if (tlist->selectable && tlist->has_selection())
                 handled_as_copy = true;
             } else if (auto border =
                            std::dynamic_pointer_cast<Border>(focused_widget_)) {
