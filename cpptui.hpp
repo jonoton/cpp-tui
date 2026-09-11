@@ -549,6 +549,15 @@ inline void copy_to_clipboard(const std::string &text) {
     success = true;
   }
 #else
+  // macOS: pbcopy
+  if (!success) {
+    FILE *pipe = popen("pbcopy 2>/dev/null", "w");
+    if (pipe) {
+      fwrite(text.c_str(), 1, text.size(), pipe);
+      if (pclose(pipe) == 0) success = true;
+    }
+  }
+
   // Linux: Try common clipboard utilities
   // 1. wl-copy (Wayland)
   if (std::getenv("WAYLAND_DISPLAY")) {
@@ -608,6 +617,21 @@ inline std::string paste_from_clipboard() {
     success = true;
   }
 #else
+  // macOS: pbpaste
+  if (!success) {
+    FILE *pipe = popen("pbpaste 2>/dev/null", "r");
+    if (pipe) {
+      while (fgets(buffer, sizeof(buffer), pipe) != NULL) {
+        result += buffer;
+        success = true;
+      }
+      if (pclose(pipe) == 0)
+        success = true;
+      else
+        result.clear();
+    }
+  }
+
   // Linux: Try common clipboard utilities
 
   // 1. wl-paste (Wayland)
