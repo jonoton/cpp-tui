@@ -514,16 +514,17 @@ inline std::string base64_encode(const std::string &input) {
 
   size_t i = 0;
   while (i < input.size()) {
-    uint32_t octet_a = i < input.size() ? (unsigned char)input[i++] : 0;
+    size_t start = i;
+    uint32_t octet_a = (unsigned char)input[i++];
     uint32_t octet_b = i < input.size() ? (unsigned char)input[i++] : 0;
     uint32_t octet_c = i < input.size() ? (unsigned char)input[i++] : 0;
+    size_t n = i - start;  // bytes read in this group (1, 2, or 3)
     uint32_t triple = (octet_a << 16) + (octet_b << 8) + octet_c;
 
     output.push_back(table[(triple >> 18) & 0x3F]);
     output.push_back(table[(triple >> 12) & 0x3F]);
-    output.push_back((i > input.size() + 1) ? '='
-                                            : table[(triple >> 6) & 0x3F]);
-    output.push_back((i > input.size()) ? '=' : table[triple & 0x3F]);
+    output.push_back(n < 2 ? '=' : table[(triple >> 6) & 0x3F]);
+    output.push_back(n < 3 ? '=' : table[triple & 0x3F]);
   }
   return output;
 }
