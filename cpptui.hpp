@@ -3472,17 +3472,20 @@ class Paragraph : public Widget {
       int indent = (line_idx == 0) ? first_line_indent : hanging_indent;
       auto chars = TextHelper::prepare_text_for_render(line);
 
-      for (int dx = 0; dx < width; ++dx) {
-        int sx = x + dx;
+      // Walk characters and visual columns separately: a character's cell
+      // column is the sum of the display widths of all preceding characters
+      // on the line
+      int char_idx = 0;
+      int col = 0;
+      while (col < width) {
+        int sx = x + col;
         int sy = y + line_idx;
-        if (sx < 0 || sx >= buffer.width() || sy < 0 || sy >= buffer.height())
-          continue;
+        bool in_buffer =
+            sx >= 0 && sx < buffer.width() && sy >= 0 && sy < buffer.height();
 
-        int cell_x = dx - indent;
-
-        if (cell_x >= 0 && cell_x < (int)chars.size()) {
-          const auto &ci = chars[cell_x];
-          int global_char_idx = char_in_plain_offset + cell_x;
+        if (char_idx < (int)chars.size() && col >= indent) {
+          const auto &ci = chars[char_idx];
+          int global_char_idx = char_in_plain_offset + char_idx;
 
           Cell cell;
           cell.content = ci.content;
@@ -3507,22 +3510,28 @@ class Paragraph : public Widget {
           }
 
           if (underline) cell.underline = true;
-          buffer.set(sx, sy, cell);
+          if (in_buffer) buffer.set(sx, sy, cell);
 
-          if (ci.display_width == 2 && dx + 1 < width) {
-            dx++;
+          int advance = ci.display_width > 0 ? ci.display_width : 1;
+          if (ci.display_width == 2 && col + 1 < width && in_buffer &&
+              sx + 1 < buffer.width()) {
             Cell skip;
             skip.content = "";
             skip.bg_color = cell.bg_color;
-            buffer.set(x + dx, sy, skip);
+            buffer.set(sx + 1, sy, skip);
           }
+          col += advance;
+          char_idx++;
         } else {
-          Cell empty;
-          if (bg_color.is_default)
-            empty.bg_color = buffer.get(sx, sy).bg_color;
-          else
-            empty.bg_color = bg_color;
-          buffer.set(sx, sy, empty);
+          if (in_buffer) {
+            Cell empty;
+            if (bg_color.is_default)
+              empty.bg_color = buffer.get(sx, sy).bg_color;
+            else
+              empty.bg_color = bg_color;
+            buffer.set(sx, sy, empty);
+          }
+          col += 1;
         }
       }
       char_in_plain_offset += (int)chars.size();
