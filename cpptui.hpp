@@ -34,7 +34,7 @@
 namespace cpptui {
 
 constexpr int VERSION_MAJOR = 1;
-constexpr int VERSION_MINOR = 13;
+constexpr int VERSION_MINOR = 14;
 constexpr int VERSION_PATCH = 0;
 
 inline std::string version() {
@@ -226,13 +226,43 @@ struct TextHelper {
     return width;
   }
 
-  /// @brief Check if a codepoint is a word character
+  /// @brief Check if a codepoint is a word character (letters, digits, ideographs)
   static bool is_word_char(uint32_t cp) {
     if (cp == '_') return true;
     if (cp >= 'a' && cp <= 'z') return true;
     if (cp >= 'A' && cp <= 'Z') return true;
     if (cp >= '0' && cp <= '9') return true;
+    // Latin-1 Supplement letters (À..Ö, Ø..ö, ø..ÿ)
+    if ((cp >= 0x00C0 && cp <= 0x00D6) || (cp >= 0x00D8 && cp <= 0x00F6) ||
+        (cp >= 0x00F8 && cp <= 0x00FF))
+      return true;
+    // Latin Extended-A, B, IPA, Modifiers, Combining Marks
+    if (cp >= 0x0100 && cp <= 0x036F) return true;
+    // Greek, Coptic, Cyrillic
+    if (cp >= 0x0370 && cp <= 0x052F) return true;
+    // Armenian, Hebrew, Arabic, Syriac, Thaana, etc.
+    if (cp >= 0x0530 && cp <= 0x08FF) return true;
+    // Devanagari, Bengali, Thai, and other alphabetic/syllabic scripts
+    if (cp >= 0x0900 && cp <= 0x1FFF) return true;
+    // Hiragana, Katakana, Bopomofo, Hangul Jamo, Kanbun
+    if (cp >= 0x3040 && cp <= 0x31FF) return true;
+    // CJK Unified Ideographs Extension A
+    if (cp >= 0x3400 && cp <= 0x4DBF) return true;
+    // CJK Unified Ideographs
     if (cp >= 0x4E00 && cp <= 0x9FFF) return true;
+    // Yi Syllables & Radicals
+    if (cp >= 0xA000 && cp <= 0xA4CF) return true;
+    // Hangul Syllables
+    if (cp >= 0xAC00 && cp <= 0xD7AF) return true;
+    // CJK Compatibility Ideographs
+    if (cp >= 0xF900 && cp <= 0xFAFF) return true;
+    // Fullwidth ASCII (digits, Latin letters, underscore) and Halfwidth Katakana/Hangul
+    if ((cp >= 0xFF10 && cp <= 0xFF19) || (cp >= 0xFF21 && cp <= 0xFF3A) ||
+        (cp >= 0xFF41 && cp <= 0xFF5A) || cp == 0xFF3F ||
+        (cp >= 0xFF66 && cp <= 0xFFDC))
+      return true;
+    // CJK Unified Ideographs Extensions
+    if (cp >= 0x20000 && cp <= 0x2FA1F) return true;
     return false;
   }
 
@@ -290,21 +320,33 @@ struct TextHelper {
   /// @brief Find word boundaries at a given character position
   static void select_word_at(const std::vector<CharInfo> &chars, int pos,
                              int &start, int &end) {
-    if (pos < 0 || pos >= (int)chars.size()) {
-      if (pos < 0) pos = 0;
-      if (pos > (int)chars.size()) pos = (int)chars.size();
-      start = pos;
-      end = pos;
+    if (chars.empty()) {
+      start = 0;
+      end = 0;
       return;
     }
+    if (pos < 0) pos = 0;
+    if (pos >= (int)chars.size()) pos = (int)chars.size() - 1;
 
     std::vector<uint32_t> codepoints;
     codepoints.reserve(chars.size());
     for (const auto &c : chars) {
-      uint32_t cp;
-      int len;
+      uint32_t cp = 0;
+      int len = 0;
       utf8_decode_codepoint(c.content, 0, cp, len);
       codepoints.push_back(cp);
+    }
+
+    if (codepoints[pos] == ' ' || codepoints[pos] == '\t') {
+      start = pos;
+      while (start > 0 &&
+             (codepoints[start - 1] == ' ' || codepoints[start - 1] == '\t'))
+        start--;
+      end = pos;
+      while (end < (int)codepoints.size() &&
+             (codepoints[end] == ' ' || codepoints[end] == '\t'))
+        end++;
+      return;
     }
 
     if (!is_word_char(codepoints[pos])) {
@@ -364,6 +406,8 @@ struct SelectionState {
   int end = -1;
   bool mouse_down = false;
   int drag_start_idx = -1;
+  int word_start_idx = -1;
+  int word_end_idx = -1;
   bool inclusive_drag = true;  // Default to inclusive (Border/Label style)
 
   int click_count = 0;
@@ -377,6 +421,9 @@ struct SelectionState {
     end = -1;
     mouse_down = false;
     drag_start_idx = -1;
+    word_start_idx = -1;
+    word_end_idx = -1;
+    click_count = 0;
   }
 
   /// @brief check if selection is active and valid
@@ -412,7 +459,7 @@ struct SelectionState {
                       now - last_click_time)
                       .count();
 
-      if (diff < 500 && last_click_idx == char_idx) {
+      if (diff < 500 && std::abs(last_click_idx - char_idx) <= 1) {
         click_count++;
       } else {
         click_count = 1;
@@ -427,18 +474,24 @@ struct SelectionState {
       TextHelper::select_word_at(chars, char_idx, s, e);
       start = s;
       end = e;
-      drag_start_idx = end;  // Anchor for drag extension
+      word_start_idx = s;
+      word_end_idx = e;
+      drag_start_idx = char_idx;
       mouse_down = true;
     } else if (click_count == 3) {
       // Triple click - Select All (or paragraph if we had line info)
       start = 0;
       end = (int)chars.size();
+      word_start_idx = 0;
+      word_end_idx = (int)chars.size();
       drag_start_idx = end;
       mouse_down = true;
     } else {
       // Single click
       mouse_down = true;
       drag_start_idx = char_idx;
+      word_start_idx = -1;
+      word_end_idx = -1;
       start = char_idx;
       end = char_idx;
     }
@@ -449,6 +502,23 @@ struct SelectionState {
   /// @brief Handle mouse drag event
   bool handle_mouse_drag(int char_idx) {
     if (mouse_down) {
+      if (click_count == 2 && word_start_idx != -1 && word_end_idx != -1) {
+        if (char_idx >= word_start_idx && char_idx < word_end_idx) {
+          start = word_start_idx;
+          end = word_end_idx;
+        } else if (char_idx < word_start_idx) {
+          start = char_idx;
+          end = word_end_idx;
+        } else {
+          start = word_start_idx;
+          end = inclusive_drag ? char_idx + 1 : char_idx;
+        }
+        return true;
+      }
+      if (click_count == 3) {
+        return true;
+      }
+
       start = std::min(drag_start_idx, char_idx);
       end = std::max(drag_start_idx, char_idx);
 
@@ -514,16 +584,17 @@ inline std::string base64_encode(const std::string &input) {
 
   size_t i = 0;
   while (i < input.size()) {
-    uint32_t octet_a = i < input.size() ? (unsigned char)input[i++] : 0;
+    size_t start = i;
+    uint32_t octet_a = (unsigned char)input[i++];
     uint32_t octet_b = i < input.size() ? (unsigned char)input[i++] : 0;
     uint32_t octet_c = i < input.size() ? (unsigned char)input[i++] : 0;
+    size_t n = i - start;  // bytes read in this group (1, 2, or 3)
     uint32_t triple = (octet_a << 16) + (octet_b << 8) + octet_c;
 
     output.push_back(table[(triple >> 18) & 0x3F]);
     output.push_back(table[(triple >> 12) & 0x3F]);
-    output.push_back((i > input.size() + 1) ? '='
-                                            : table[(triple >> 6) & 0x3F]);
-    output.push_back((i > input.size()) ? '=' : table[triple & 0x3F]);
+    output.push_back(n < 2 ? '=' : table[(triple >> 6) & 0x3F]);
+    output.push_back(n < 3 ? '=' : table[triple & 0x3F]);
   }
   return output;
 }
@@ -547,6 +618,13 @@ inline void copy_to_clipboard(const std::string &text) {
     fwrite(text.c_str(), 1, text.size(), pipe);
     _pclose(pipe);
     success = true;
+  }
+#elif defined(__APPLE__)
+  // macOS: pbcopy
+  FILE *pipe = popen("pbcopy 2>/dev/null", "w");
+  if (pipe) {
+    fwrite(text.c_str(), 1, text.size(), pipe);
+    if (pclose(pipe) == 0) success = true;
   }
 #else
   // Linux: Try common clipboard utilities
@@ -606,6 +684,19 @@ inline std::string paste_from_clipboard() {
     if (!result.empty() && result.back() == '\n') result.pop_back();
     if (!result.empty() && result.back() == '\r') result.pop_back();
     success = true;
+  }
+#elif defined(__APPLE__)
+  // macOS: pbpaste
+  FILE *pipe = popen("pbpaste 2>/dev/null", "r");
+  if (pipe) {
+    while (fgets(buffer, sizeof(buffer), pipe) != NULL) {
+      result += buffer;
+      success = true;
+    }
+    if (pclose(pipe) == 0)
+      success = true;
+    else
+      result.clear();
   }
 #else
   // Linux: Try common clipboard utilities
@@ -1964,7 +2055,11 @@ class Terminal {
 
   /// @brief Write raw string data to the terminal output
   /// @param data The string to write
-  void write(const std::string &data) { std::cout << data; }
+  void write(const std::string &data) {
+    if (!data.empty()) {
+      std::cout << data;
+    }
+  }
 
   /// @brief Flush the output stream
   void flush() { std::cout.flush(); }
@@ -2639,7 +2734,7 @@ class Terminal {
                            .count();
 
         if (elapsed < 500 && event.button == last_click_button_ &&
-            event.x == last_click_x_ && event.y == last_click_y_) {
+            std::abs(event.x - last_click_x_) <= 1 && event.y == last_click_y_) {
           current_click_count_++;
           if (current_click_count_ > 3)
             current_click_count_ =
@@ -3145,7 +3240,7 @@ class Static : public Widget {
     if (has_focus() && event.is_key_event()) {
       if (event.is_select_all()) {
         selection_state_.start = 0;
-        selection_state_.end = (int)text_.length();
+        selection_state_.end = (int)TextHelper::count_codepoints(text_);
         return true;
       }
       if (event.is_copy()) {
@@ -3162,7 +3257,7 @@ class Static : public Widget {
     if (!has_selection()) return "";
     int s, e;
     selection_state_.get_range(s, e);
-    return text_.substr(s, e - s);
+    return TextHelper::utf8_substr(text_, s, e - s);
   }
 
   bool is_char_selected(int char_idx) const {
@@ -3273,7 +3368,7 @@ class Label : public Widget {
     if (has_focus() && event.is_key_event()) {
       if (event.is_select_all()) {
         selection_state_.start = 0;
-        selection_state_.end = (int)text_.length();
+        selection_state_.end = (int)TextHelper::count_codepoints(text_);
         return true;
       }
       if (event.is_copy()) {
@@ -3443,17 +3538,20 @@ class Paragraph : public Widget {
       int indent = (line_idx == 0) ? first_line_indent : hanging_indent;
       auto chars = TextHelper::prepare_text_for_render(line);
 
-      for (int dx = 0; dx < width; ++dx) {
-        int sx = x + dx;
+      // Walk characters and visual columns separately: a character's cell
+      // column is the sum of the display widths of all preceding characters
+      // on the line
+      int char_idx = 0;
+      int col = 0;
+      while (col < width) {
+        int sx = x + col;
         int sy = y + line_idx;
-        if (sx < 0 || sx >= buffer.width() || sy < 0 || sy >= buffer.height())
-          continue;
+        bool in_buffer =
+            sx >= 0 && sx < buffer.width() && sy >= 0 && sy < buffer.height();
 
-        int cell_x = dx - indent;
-
-        if (cell_x >= 0 && cell_x < (int)chars.size()) {
-          const auto &ci = chars[cell_x];
-          int global_char_idx = char_in_plain_offset + cell_x;
+        if (char_idx < (int)chars.size() && col >= indent) {
+          const auto &ci = chars[char_idx];
+          int global_char_idx = char_in_plain_offset + char_idx;
 
           Cell cell;
           cell.content = ci.content;
@@ -3478,22 +3576,28 @@ class Paragraph : public Widget {
           }
 
           if (underline) cell.underline = true;
-          buffer.set(sx, sy, cell);
+          if (in_buffer) buffer.set(sx, sy, cell);
 
-          if (ci.display_width == 2 && dx + 1 < width) {
-            dx++;
+          int advance = ci.display_width > 0 ? ci.display_width : 1;
+          if (ci.display_width == 2 && col + 1 < width && in_buffer &&
+              sx + 1 < buffer.width()) {
             Cell skip;
             skip.content = "";
             skip.bg_color = cell.bg_color;
-            buffer.set(x + dx, sy, skip);
+            buffer.set(sx + 1, sy, skip);
           }
+          col += advance;
+          char_idx++;
         } else {
-          Cell empty;
-          if (bg_color.is_default)
-            empty.bg_color = buffer.get(sx, sy).bg_color;
-          else
-            empty.bg_color = bg_color;
-          buffer.set(sx, sy, empty);
+          if (in_buffer) {
+            Cell empty;
+            if (bg_color.is_default)
+              empty.bg_color = buffer.get(sx, sy).bg_color;
+            else
+              empty.bg_color = bg_color;
+            buffer.set(sx, sy, empty);
+          }
+          col += 1;
         }
       }
       char_in_plain_offset += (int)chars.size();
@@ -3538,7 +3642,7 @@ class Paragraph : public Widget {
     if (has_focus() && event.is_key_event()) {
       if (event.is_select_all()) {
         selection_state_.start = 0;
-        selection_state_.end = (int)text.length();
+        selection_state_.end = (int)TextHelper::count_codepoints(text);
         return true;
       }
       if (event.is_copy()) {
@@ -3556,7 +3660,7 @@ class Paragraph : public Widget {
     if (!has_selection()) return "";
     int s, e;
     selection_state_.get_range(s, e);
-    return text.substr(s, e - s);
+    return TextHelper::utf8_substr(text, s, e - s);
   }
 
   int visual_to_char_idx(int vx, int vy) const {
@@ -3585,7 +3689,7 @@ class Paragraph : public Widget {
         int rel_x = vx - x - indent;
         int cur_vx = 0;
         for (int j = 0; j < (int)chars.size(); ++j) {
-          if (rel_x < cur_vx + chars[j].display_width / 2)
+          if (rel_x < cur_vx + (chars[j].display_width + 1) / 2)
             return char_offset + j;
           cur_vx += chars[j].display_width;
         }
@@ -4016,7 +4120,8 @@ class TextList : public Widget {
     if (has_focus() && event.is_key_event()) {
       if (event.is_select_all()) {
         selection_state_.start = 0;
-        selection_state_.end = (int)get_full_text().length();
+        selection_state_.end =
+            (int)TextHelper::count_codepoints(get_full_text());
         return true;
       }
       if (event.is_copy()) {
@@ -4040,7 +4145,7 @@ class TextList : public Widget {
     int s, e;
     selection_state_.get_range(s, e);
     std::string plain = get_full_text();
-    return plain.substr(s, e - s);
+    return TextHelper::utf8_substr(plain, s, e - s);
   }
 
  private:
@@ -4092,7 +4197,7 @@ class TextList : public Widget {
 
           int t_vx = 0;
           for (int ci = 0; ci < (int)chars.size(); ++ci) {
-            if (rel_x < t_vx + chars[ci].display_width / 2)
+            if (rel_x < t_vx + (chars[ci].display_width + 1) / 2)
               return char_in_full_text_offset + item_char_offset + ci;
             t_vx += chars[ci].display_width;
           }
@@ -4127,7 +4232,8 @@ class TextList : public Widget {
     // Simple: select the whole item that contains 'pos'
     int char_offset = 0;
     for (const auto &item : items) {
-      int next_offset = char_offset + (int)item.text.length();
+      int next_offset =
+          char_offset + (int)TextHelper::count_codepoints(item.text);
       if (pos >= char_offset && pos <= next_offset) {
         selection_state_.start = char_offset;
         selection_state_.end = next_offset;
@@ -16609,6 +16715,11 @@ class App {
             } else if (auto para = std::dynamic_pointer_cast<Paragraph>(
                            focused_widget_)) {
               if (para->selectable && para->has_selection())
+                handled_as_copy = true;
+            } else if (auto tlist =
+                           std::dynamic_pointer_cast<TextList>(
+                               focused_widget_)) {
+              if (tlist->selectable && tlist->has_selection())
                 handled_as_copy = true;
             } else if (auto border =
                            std::dynamic_pointer_cast<Border>(focused_widget_)) {
