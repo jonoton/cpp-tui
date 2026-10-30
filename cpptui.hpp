@@ -34,7 +34,7 @@
 namespace cpptui {
 
 constexpr int VERSION_MAJOR = 1;
-constexpr int VERSION_MINOR = 15;
+constexpr int VERSION_MINOR = 16;
 constexpr int VERSION_PATCH = 0;
 
 inline std::string version() {
@@ -2423,6 +2423,9 @@ class Terminal {
             if (ks & SHIFT_PRESSED) event.shift = true;
             if (ks & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) event.alt = true;
             switch (vk) {
+              case VK_ESCAPE:
+                event.key = 27;
+                break;
               case VK_SPACE:
                 event.key = ' ';
                 break;  // Ctrl+Space
@@ -2588,6 +2591,9 @@ class Terminal {
           if (ks & SHIFT_PRESSED) event.shift = true;
           if (ks & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) event.alt = true;
           switch (vk) {
+            case VK_ESCAPE:
+              event.key = 27;
+              break;
             case VK_UP:
               event.key = 1065;
               break;
