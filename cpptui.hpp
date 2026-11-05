@@ -1,3 +1,8 @@
+// cpp-tui - A lightweight, single-header C++ TUI library
+// https://github.com/jonoton/cpp-tui
+// Copyright (c) 2025 cpp-tui
+// Licensed under the MIT License. SPDX-License-Identifier: MIT
+
 #pragma once
 
 #ifdef _WIN32
@@ -34,7 +39,7 @@
 namespace cpptui {
 
 constexpr int VERSION_MAJOR = 1;
-constexpr int VERSION_MINOR = 16;
+constexpr int VERSION_MINOR = 17;
 constexpr int VERSION_PATCH = 0;
 
 inline std::string version() {
