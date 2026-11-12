@@ -6,7 +6,9 @@
 #pragma once
 
 #ifdef _WIN32
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <conio.h>
 #include <windows.h>
 #else
@@ -39,7 +41,7 @@
 namespace cpptui {
 
 constexpr int VERSION_MAJOR = 1;
-constexpr int VERSION_MINOR = 17;
+constexpr int VERSION_MINOR = 18;
 constexpr int VERSION_PATCH = 0;
 
 inline std::string version() {
@@ -610,6 +612,8 @@ inline std::string g_internal_clipboard = "";
 /// @brief Copy text to system clipboard using native methods and OSC 52
 /// fallback
 inline void copy_to_clipboard(const std::string &text) {
+  static std::mutex mtx;
+  std::lock_guard<std::mutex> lock(mtx);
   if (text.empty()) return;
 
   // Always save to internal clipboard first
@@ -624,7 +628,9 @@ inline void copy_to_clipboard(const std::string &text) {
     _pclose(pipe);
     success = true;
   }
-#elif defined(__APPLE__)
+#else
+  auto old_sigpipe = signal(SIGPIPE, SIG_IGN);
+#if defined(__APPLE__)
   // macOS: pbcopy
   FILE *pipe = popen("pbcopy 2>/dev/null", "w");
   if (pipe) {
@@ -635,11 +641,10 @@ inline void copy_to_clipboard(const std::string &text) {
   // Linux: Try common clipboard utilities
   // 1. wl-copy (Wayland)
   if (std::getenv("WAYLAND_DISPLAY")) {
-    FILE *pipe = popen("wl-copy", "w");
+    FILE *pipe = popen("wl-copy 2>/dev/null", "w");
     if (pipe) {
       fwrite(text.c_str(), 1, text.size(), pipe);
-      pclose(pipe);
-      success = true;
+      if (pclose(pipe) == 0) success = true;
     }
   }
 
@@ -659,6 +664,10 @@ inline void copy_to_clipboard(const std::string &text) {
       fwrite(text.c_str(), 1, text.size(), pipe);
       if (pclose(pipe) == 0) success = true;
     }
+  }
+#endif
+  if (old_sigpipe != SIG_ERR) {
+    signal(SIGPIPE, old_sigpipe);
   }
 #endif
 
@@ -785,6 +794,7 @@ struct Event {
   int button = -1;                   ///< Raw button code for Mouse events
   int click_count = 0;     ///< Number of clicks (1=single, 2=double, 3=triple)
   std::string paste_text;  ///< Text content for Paste events
+  std::string text;        ///< UTF-8 text for Key events
 
   // Helpers for standard 1003 mouse tracking encoding
   bool mouse_left() const { return (button & 3) == 0 && (button & 64) == 0; }
@@ -832,17 +842,17 @@ struct Event {
   bool is_enter() const { return key == 10 || key == 13; }
   bool is_tab() const { return key == 9; }
   bool is_backspace() const { return key == 8 || key == 127; }
-  bool is_delete() const { return key == 1005; }
+  bool is_delete() const { return text.empty() && key == 1005; }
 
-  bool is_nav_up() const { return key == 1065; }
-  bool is_nav_down() const { return key == 1066; }
-  bool is_nav_left() const { return key == 1068; }
-  bool is_nav_right() const { return key == 1067; }
-  bool is_nav_home() const { return key == 1003; }
-  bool is_nav_end() const { return key == 1004; }
-  bool is_nav_pgup() const { return key == 1001; }
-  bool is_nav_pgdn() const { return key == 1002; }
-  bool is_insert() const { return key == 1006; }
+  bool is_nav_up() const { return text.empty() && key == 1065; }
+  bool is_nav_down() const { return text.empty() && key == 1066; }
+  bool is_nav_left() const { return text.empty() && key == 1068; }
+  bool is_nav_right() const { return text.empty() && key == 1067; }
+  bool is_nav_home() const { return text.empty() && key == 1003; }
+  bool is_nav_end() const { return text.empty() && key == 1004; }
+  bool is_nav_pgup() const { return text.empty() && key == 1001; }
+  bool is_nav_pgdn() const { return text.empty() && key == 1002; }
+  bool is_insert() const { return text.empty() && key == 1006; }
 
   // Helpers for read-only view scrolling (includes '5', '6', Delete, Insert)
   bool is_view_scroll_up() const {
@@ -861,7 +871,8 @@ struct Event {
   bool is_escape() const { return key == 27; }
   bool is_activate() const { return is_enter() || is_space(); }
   bool is_printable() const {
-    return (unsigned char)key >= 32 && key != 127 && key < 1000;
+    if (ctrl ^ alt) return false;
+    return !text.empty() || (key >= 32 && key < 127);
   }
 
   // Mouse wheel direction helpers
@@ -1583,7 +1594,11 @@ class VTParser {
  public:
   /// @brief Check if the parser is currently processing an escape sequence
   /// @return true if inside a sequence, false otherwise
-  bool in_sequence() const { return state_ != State::Start; }
+  bool in_sequence() const { return state_ != State::Start || utf8_expected_ > 0; }
+
+  /// @brief Check if the parser is currently collecting a bracketed paste
+  /// @return true if inside bracketed paste, false otherwise
+  bool in_paste() const { return state_ == State::BracketedPaste; }
 
   /// @brief Process a single byte of input
   /// @param c The character to process
@@ -1595,14 +1610,88 @@ class VTParser {
 
     // buffer management
     if (state_ == State::Start) {
+      unsigned char uc = (unsigned char)c;
+      if (utf8_expected_ > 0) {
+        if ((uc & 0xC0) == 0x80) {
+          utf8_buffer_.push_back(c);
+          if (utf8_buffer_.size() == utf8_expected_) {
+            uint32_t codepoint = 0;
+            if (utf8_expected_ == 2) {
+              codepoint = (((unsigned char)utf8_buffer_[0] & 0x1F) << 6) |
+                          ((unsigned char)utf8_buffer_[1] & 0x3F);
+            } else if (utf8_expected_ == 3) {
+              codepoint = (((unsigned char)utf8_buffer_[0] & 0x0F) << 12) |
+                          (((unsigned char)utf8_buffer_[1] & 0x3F) << 6) |
+                          ((unsigned char)utf8_buffer_[2] & 0x3F);
+            } else if (utf8_expected_ == 4) {
+              codepoint = (((unsigned char)utf8_buffer_[0] & 0x07) << 18) |
+                          (((unsigned char)utf8_buffer_[1] & 0x3F) << 12) |
+                          (((unsigned char)utf8_buffer_[2] & 0x3F) << 6) |
+                          ((unsigned char)utf8_buffer_[3] & 0x3F);
+            }
+
+            // UTF-8 validation: reject overlong, surrogates, and cp > 0x10FFFF
+            bool invalid = false;
+            if (utf8_expected_ == 2 && codepoint < 0x80) {
+              invalid = true;
+            } else if (utf8_expected_ == 3 &&
+                       (codepoint < 0x800 ||
+                        (codepoint >= 0xD800 && codepoint <= 0xDFFF))) {
+              invalid = true;
+            } else if (utf8_expected_ == 4 &&
+                       (codepoint < 0x10000 || codepoint > 0x10FFFF)) {
+              invalid = true;
+            }
+
+            if (invalid) {
+              utf8_buffer_.clear();
+              utf8_expected_ = 0;
+              utf8_alt_ = false;
+              return event;
+            }
+
+            event.type = EventType::Key;
+            event.key = (int)codepoint;
+            event.text = utf8_buffer_;
+            event.alt = utf8_alt_;
+            utf8_buffer_.clear();
+            utf8_expected_ = 0;
+            utf8_alt_ = false;
+            return event;
+          }
+          return event;
+        } else {
+          // Unexpected continuation byte: emit as before (single byte) and reset
+          utf8_buffer_.clear();
+          utf8_expected_ = 0;
+          utf8_alt_ = false;
+          // fall through to process c
+        }
+      }
+
       if (c == 27) {  // ESC
         state_ = State::Escape;
         buffer_.clear();
         buffer_.push_back(c);
+      } else if (uc >= 0xC2 && uc <= 0xF4) {
+        utf8_alt_ = false;
+        utf8_buffer_.clear();
+        utf8_buffer_.push_back(c);
+        if (uc <= 0xDF) {
+          utf8_expected_ = 2;
+        } else if (uc <= 0xEF) {
+          utf8_expected_ = 3;
+        } else {
+          utf8_expected_ = 4;
+        }
+        return event;
       } else {
         // Regular key
         event.type = EventType::Key;
         event.key = c;
+        if (c >= 32 && c < 127) {
+          event.text = std::string(1, c);
+        }
 
         // Handle Ctrl+Space (produces NUL = 0 on Unix)
         if (c == 0) {
@@ -1633,6 +1722,21 @@ class VTParser {
         buffer_.push_back(c);
         state_ = State::Escape;
       } else {
+        unsigned char uc = (unsigned char)c;
+        if (uc >= 0xC2 && uc <= 0xF4) {
+          state_ = State::Start;
+          utf8_alt_ = true;
+          utf8_buffer_.clear();
+          utf8_buffer_.push_back(c);
+          if (uc <= 0xDF) {
+            utf8_expected_ = 2;
+          } else if (uc <= 0xEF) {
+            utf8_expected_ = 3;
+          } else {
+            utf8_expected_ = 4;
+          }
+          return event;
+        }
         // Alt + Key
         buffer_.push_back(c);
         state_ = State::Start;
@@ -1645,8 +1749,7 @@ class VTParser {
       buffer_.push_back(c);
       state_ = State::Start;  // simplified, usually just one char
       event.type = EventType::Key;
-      // Map F-keys (basic mapping)
-      // O + P = F1, Q=F2, R=F3, S=F4
+      // Map F-keys (basic mapping) and App cursor/keypad keys
       if (c == 'P')
         event.key = 1011;  // F1
       else if (c == 'Q')
@@ -1655,21 +1758,42 @@ class VTParser {
         event.key = 1013;  // F3
       else if (c == 'S')
         event.key = 1014;  // F4
+      else if (c == 'A')
+        event.key = 1065;  // Up
+      else if (c == 'B')
+        event.key = 1066;  // Down
+      else if (c == 'C')
+        event.key = 1067;  // Right
+      else if (c == 'D')
+        event.key = 1068;  // Left
+      else if (c == 'H')
+        event.key = 1003;  // Home
+      else if (c == 'F')
+        event.key = 1004;  // End
+      else
+        event.type = EventType::None;
     } else if (state_ == State::CSI) {
       buffer_.push_back(c);
-      if (c == 'M') {
+      if (buffer_.size() == 3 && c == 'M') {
         // X10 Mouse \033[M...
         state_ = State::MouseX10;
         byte_counter_ = 0;
-      } else if (c == '<') {
+      } else if (buffer_.size() == 3 && c == '<') {
         // SGR Mouse \033[<...
         state_ = State::MouseSGR;
-      } else if (isdigit(c) || c == ';') {
-        // Parameter bytes
       } else {
-        // Final byte
-        state_ = State::Start;
-        return parseCSI(buffer_);
+        unsigned char uc = (unsigned char)c;
+        if (uc >= 0x20 && uc <= 0x3F) {
+          // Parameter / intermediate bytes (0x30-0x3F parameter, 0x20-0x2F intermediate)
+        } else if (uc >= 0x40 && uc <= 0x7E) {
+          // Final byte
+          state_ = State::Start;
+          return parseCSI(buffer_);
+        } else {
+          // Control or invalid byte - abort CSI sequence
+          state_ = State::Start;
+          buffer_.clear();
+        }
       }
     } else if (state_ == State::MouseX10) {
       buffer_.push_back(c);
@@ -1687,6 +1811,9 @@ class VTParser {
     } else if (state_ == State::BracketedPaste) {
       // Collect paste content until we see ESC
       if (c == 27) {  // ESC - might be end of paste
+        if (paste_escape_state_ > 0) {
+          paste_buffer_ += paste_escape_buffer_;
+        }
         paste_escape_buffer_.clear();
         paste_escape_buffer_.push_back(c);
         paste_escape_state_ = 1;
@@ -1725,11 +1852,33 @@ class VTParser {
     return event;
   }
 
+  /// @brief Finish bracketed paste on inactivity timeout
+  /// @return A Paste event with collected text if in BracketedPaste and non-empty, otherwise None
+  Event finish_paste() {
+    Event event;
+    event.type = EventType::None;
+    if (state_ == State::BracketedPaste) {
+      std::string full_paste = paste_buffer_ + paste_escape_buffer_;
+      state_ = State::Start;
+      paste_buffer_.clear();
+      paste_escape_buffer_.clear();
+      paste_escape_state_ = 0;
+      if (!full_paste.empty()) {
+        event.type = EventType::Paste;
+        event.paste_text = std::move(full_paste);
+      }
+    }
+    return event;
+  }
+
   /// @brief Flush any pending partial sequence when an input read times out
   /// @return An Event if a pending sequence like lone Escape should be emitted, otherwise None
   Event flush() {
     Event event;
     event.type = EventType::None;
+    if (state_ == State::BracketedPaste) {
+      return event;
+    }
     if (state_ == State::Escape) {
       event.type = EventType::Key;
       event.key = 27;
@@ -1737,6 +1886,9 @@ class VTParser {
     }
     state_ = State::Start;
     buffer_.clear();
+    utf8_buffer_.clear();
+    utf8_expected_ = 0;
+    utf8_alt_ = false;
     paste_buffer_.clear();
     paste_escape_buffer_.clear();
     paste_escape_state_ = 0;
@@ -1756,6 +1908,9 @@ class VTParser {
   };
   State state_ = State::Start;
   std::string buffer_;
+  std::string utf8_buffer_;
+  size_t utf8_expected_ = 0;
+  bool utf8_alt_ = false;
   std::string paste_buffer_;  ///< Buffer for bracketed paste content
   std::string
       paste_escape_buffer_;     ///< Buffer for detecting paste end sequence
@@ -1769,8 +1924,18 @@ class VTParser {
     // Format: ESC [ p1 ; p2 cmd
     // strip ESC [
     std::string body = seq.substr(2);
+    if (body.empty()) {
+      event.type = EventType::None;
+      return event;
+    }
     char cmd = body.back();
     body.pop_back();
+
+    // Check for private markers ('?', '>', '=', '<', etc.)
+    if (body.find_first_of("?><=") != std::string::npos) {
+      event.type = EventType::None;
+      return event;
+    }
 
     int p1 = 1;
     int p2 = 1;
@@ -1778,18 +1943,38 @@ class VTParser {
     if (!body.empty()) {
       size_t semi = body.find(';');
       if (semi != std::string::npos) {
-        try {
-          p1 = std::stoi(body.substr(0, semi));
-        } catch (...) {
+        std::string s1 = body.substr(0, semi);
+        std::string s2 = body.substr(semi + 1);
+        std::string d1, d2;
+        for (char ch : s1) {
+          if (isdigit(ch)) d1 += ch;
         }
-        try {
-          p2 = std::stoi(body.substr(semi + 1));
-        } catch (...) {
+        for (char ch : s2) {
+          if (isdigit(ch)) d2 += ch;
+          else if (ch == ';') break;
+        }
+        if (!d1.empty()) {
+          try {
+            p1 = std::stoi(d1);
+          } catch (...) {
+          }
+        }
+        if (!d2.empty()) {
+          try {
+            p2 = std::stoi(d2);
+          } catch (...) {
+          }
         }
       } else {
-        try {
-          p1 = std::stoi(body);
-        } catch (...) {
+        std::string d1;
+        for (char ch : body) {
+          if (isdigit(ch)) d1 += ch;
+        }
+        if (!d1.empty()) {
+          try {
+            p1 = std::stoi(d1);
+          } catch (...) {
+          }
         }
       }
     }
@@ -1825,8 +2010,24 @@ class VTParser {
       case 'F':
         event.key = 1004;
         break;  // End
+      case 'P':
+        event.key = 1011;  // F1
+        break;
+      case 'Q':
+        event.key = 1012;  // F2
+        break;
+      case 'R':
+        event.key = 1013;  // F3
+        break;
+      case 'S':
+        event.key = 1014;  // F4
+        break;
       case '~':
-        if (p1 == 5)
+        if (p1 == 1 || p1 == 7)
+          event.key = 1003;  // Home
+        else if (p1 == 4 || p1 == 8)
+          event.key = 1004;  // End
+        else if (p1 == 5)
           event.key = 1001;  // PageUp
         else if (p1 == 6)
           event.key = 1002;  // PageDown
@@ -1834,6 +2035,22 @@ class VTParser {
           event.key = 1005;  // Delete
         else if (p1 == 2)
           event.key = 1006;  // Insert
+        else if (p1 == 15)
+          event.key = 1015;  // F5
+        else if (p1 == 17)
+          event.key = 1016;  // F6
+        else if (p1 == 18)
+          event.key = 1017;  // F7
+        else if (p1 == 19)
+          event.key = 1018;  // F8
+        else if (p1 == 20)
+          event.key = 1019;  // F9
+        else if (p1 == 21)
+          event.key = 1020;  // F10
+        else if (p1 == 23)
+          event.key = 1021;  // F11
+        else if (p1 == 24)
+          event.key = 1022;  // F12
         else if (p1 == 200) {
           // Bracketed Paste Start \e[200~
           state_ = State::BracketedPaste;
@@ -1841,10 +2058,12 @@ class VTParser {
           paste_escape_buffer_.clear();
           paste_escape_state_ = 0;
           event.type = EventType::None;  // No event yet, waiting for content
+        } else {
+          event.type = EventType::None;
         }
         break;
       default:
-        event.key = 0;
+        event.type = EventType::None;
         break;
     }
     return event;
@@ -1931,6 +2150,9 @@ class Terminal {
 
   /// @brief Construct the terminal interface and enable raw mode
   Terminal() { enableRawMode(); }
+
+  Terminal(const Terminal &) = delete;
+  Terminal &operator=(const Terminal &) = delete;
 
   /// @brief Destructor restores the terminal to canonical mode
   ~Terminal() { disableRawMode(); }
@@ -2127,7 +2349,7 @@ class Terminal {
       if (nEvents == 0) break;
       INPUT_RECORD ir;
       DWORD read;
-      ReadConsoleInput(hIn, &ir, 1, &read);
+      ReadConsoleInputW(hIn, &ir, 1, &read);
     }
 #else
     // On Unix, drain any buffered stdin
@@ -2301,6 +2523,70 @@ class Terminal {
 #endif
   }
 
+#ifdef _WIN32
+  /// @brief Encode a Unicode codepoint as UTF-8 (1-4 bytes)
+  static std::string utf8_encode_codepoint(uint32_t cp) {
+    std::string s;
+    if (cp < 0x80) {
+      s.push_back((char)cp);
+    } else if (cp < 0x800) {
+      s.push_back((char)(0xC0 | ((cp >> 6) & 0x1F)));
+      s.push_back((char)(0x80 | (cp & 0x3F)));
+    } else if (cp < 0x10000) {
+      s.push_back((char)(0xE0 | ((cp >> 12) & 0x0F)));
+      s.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
+      s.push_back((char)(0x80 | (cp & 0x3F)));
+    } else {
+      s.push_back((char)(0xF0 | ((cp >> 18) & 0x07)));
+      s.push_back((char)(0x80 | ((cp >> 12) & 0x3F)));
+      s.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
+      s.push_back((char)(0x80 | (cp & 0x3F)));
+    }
+    return s;
+  }
+
+  Event process_windows_key_char(WCHAR wc) {
+    Event event;
+    if (wc >= 0xD800 && wc <= 0xDBFF) {
+      pending_high_surrogate_ = wc;
+      return event;
+    }
+    uint32_t cp = 0;
+    if (wc >= 0xDC00 && wc <= 0xDFFF) {
+      if (pending_high_surrogate_ != 0) {
+        uint32_t hi = (uint32_t)pending_high_surrogate_;
+        uint32_t lo = (uint32_t)wc;
+        pending_high_surrogate_ = 0;
+        cp = 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
+      } else {
+        return event;
+      }
+    } else {
+      pending_high_surrogate_ = 0;
+      cp = (uint32_t)wc;
+    }
+
+    if (cp <= 127) {
+      char ch = (char)cp;
+      if (ch != 0) {
+        event = parser_.process(ch);
+        if (parser_.in_paste()) {
+          last_paste_byte_time_ = std::chrono::steady_clock::now();
+        }
+      }
+    } else {
+      std::string u8 = utf8_encode_codepoint(cp);
+      for (char b : u8) {
+        event = parser_.process(b);
+        if (parser_.in_paste()) {
+          last_paste_byte_time_ = std::chrono::steady_clock::now();
+        }
+      }
+    }
+    return event;
+  }
+#endif
+
   /// @brief Read an event from input
   /// @param timeout_ms Maximum time to wait in milliseconds (-1 for infinite)
   /// @return The read Event (or EventType::None if timeout)
@@ -2311,12 +2597,25 @@ class Terminal {
 #ifdef _WIN32
     HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
 
+    int paste_timeout_ms = timeout_ms;
+    if (parser_.in_paste()) {
+      auto now = std::chrono::steady_clock::now();
+      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+          now - last_paste_byte_time_).count();
+      int paste_remaining_ms = (int)(1000 - elapsed);
+      if (paste_remaining_ms < 0) paste_remaining_ms = 0;
+      if (paste_timeout_ms < 0 || paste_remaining_ms < paste_timeout_ms) {
+        paste_timeout_ms = paste_remaining_ms;
+      }
+    }
+
     // VT Input Path - VT sequences arrive as KEY_EVENT records
     if (vt_input_supported_) {
       // Wait for input or wakeup event
-      if (timeout_ms != 0) {
+      if (timeout_ms != 0 || parser_.in_paste()) {
         DWORD waitRes;
-        DWORD timeout_val = (timeout_ms < 0) ? INFINITE : (DWORD)timeout_ms;
+        DWORD timeout_val =
+            (paste_timeout_ms < 0) ? INFINITE : (DWORD)paste_timeout_ms;
         if (g_wakeup_event) {
           HANDLE handles[2] = {hIn, g_wakeup_event};
           waitRes = WaitForMultipleObjects(2, handles, FALSE, timeout_val);
@@ -2328,7 +2627,14 @@ class Terminal {
         } else {
           waitRes = WaitForSingleObject(hIn, timeout_val);
         }
-        if (waitRes == WAIT_TIMEOUT) return event;
+        if (waitRes == WAIT_TIMEOUT) {
+          if (parser_.in_paste() &&
+              std::chrono::steady_clock::now() >=
+                  last_paste_byte_time_ + std::chrono::milliseconds(1000)) {
+            return parser_.finish_paste();
+          }
+          return event;
+        }
       }
 
       DWORD nEvents = 0;
@@ -2337,27 +2643,28 @@ class Terminal {
       while (nEvents > 0) {
         INPUT_RECORD ir[1];
         DWORD read;
-        if (!ReadConsoleInput(hIn, ir, 1, &read) || read == 0) break;
+        if (!ReadConsoleInputW(hIn, ir, 1, &read) || read == 0) break;
 
         if (ir[0].EventType == KEY_EVENT && ir[0].Event.KeyEvent.bKeyDown) {
-          char ch = ir[0].Event.KeyEvent.uChar.AsciiChar;
-          if (ch != 0) {
-            event = parser_.process(ch);
+          WCHAR wc = ir[0].Event.KeyEvent.uChar.UnicodeChar;
+          if (wc != 0) {
+            event = process_windows_key_char(wc);
 
             // Continue reading if we're mid-sequence
-            while (event.type == EventType::None && parser_.in_sequence()) {
+            while (event.type == EventType::None &&
+                   (parser_.in_sequence() || pending_high_surrogate_ != 0)) {
               GetNumberOfConsoleInputEvents(hIn, &nEvents);
               if (nEvents == 0) {
                 WaitForSingleObject(hIn, 20);
                 GetNumberOfConsoleInputEvents(hIn, &nEvents);
                 if (nEvents == 0) break;
               }
-              if (!ReadConsoleInput(hIn, ir, 1, &read) || read == 0) break;
+              if (!ReadConsoleInputW(hIn, ir, 1, &read) || read == 0) break;
               if (ir[0].EventType == KEY_EVENT &&
                   ir[0].Event.KeyEvent.bKeyDown) {
-                ch = ir[0].Event.KeyEvent.uChar.AsciiChar;
-                if (ch != 0) {
-                  event = parser_.process(ch);
+                WCHAR wc_inner = ir[0].Event.KeyEvent.uChar.UnicodeChar;
+                if (wc_inner != 0) {
+                  event = process_windows_key_char(wc_inner);
                 }
               } else if (ir[0].EventType == MOUSE_EVENT) {
                 event.type = EventType::Mouse;
@@ -2402,8 +2709,14 @@ class Terminal {
               }
             }
 
-            if (event.type == EventType::None && parser_.in_sequence()) {
+            if (event.type == EventType::None && parser_.in_sequence() &&
+                !parser_.in_paste()) {
               event = parser_.flush();
+            }
+            if (event.type == EventType::None && parser_.in_paste() &&
+                std::chrono::steady_clock::now() >=
+                    last_paste_byte_time_ + std::chrono::milliseconds(1000)) {
+              event = parser_.finish_paste();
             }
 
             if (event.type != EventType::None) {
@@ -2521,35 +2834,53 @@ class Terminal {
     // Standard blocking input
     int legacy_timeout =
         (vt_input_supported_ && timeout_ms != -1) ? 0 : timeout_ms;
+    if (parser_.in_paste()) {
+      auto now = std::chrono::steady_clock::now();
+      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+          now - last_paste_byte_time_).count();
+      int paste_remaining_ms = (int)(1000 - elapsed);
+      if (paste_remaining_ms < 0) paste_remaining_ms = 0;
+      if (legacy_timeout < 0 || paste_remaining_ms < legacy_timeout) {
+        legacy_timeout = paste_remaining_ms;
+      }
+    }
 
-    if (legacy_timeout >= 0) {
+    if (legacy_timeout >= 0 || parser_.in_paste()) {
       DWORD result;
+      DWORD wait_time = (legacy_timeout < 0) ? INFINITE : (DWORD)legacy_timeout;
       if (g_wakeup_event) {
         HANDLE handles[2] = {hIn, g_wakeup_event};
-        result = WaitForMultipleObjects(2, handles, FALSE, legacy_timeout);
+        result = WaitForMultipleObjects(2, handles, FALSE, wait_time);
         if (result == WAIT_OBJECT_0 + 1) {
           event.type = EventType::Wakeup;
           return event;
         }
       } else {
-        result = WaitForSingleObject(hIn, legacy_timeout);
+        result = WaitForSingleObject(hIn, wait_time);
       }
-      if (result == WAIT_TIMEOUT) return event;
+      if (result == WAIT_TIMEOUT) {
+        if (parser_.in_paste() &&
+            std::chrono::steady_clock::now() >=
+                last_paste_byte_time_ + std::chrono::milliseconds(1000)) {
+          return parser_.finish_paste();
+        }
+        return event;
+      }
     }
 
     DWORD read;
     INPUT_RECORD ir[1];
 
-    if (ReadConsoleInput(hIn, ir, 1, &read) && read > 0) {
+    if (ReadConsoleInputW(hIn, ir, 1, &read) && read > 0) {
       if (ir[0].EventType == KEY_EVENT && ir[0].Event.KeyEvent.bKeyDown) {
-        char ch = ir[0].Event.KeyEvent.uChar.AsciiChar;
-
-        if (ch != 0) {
-          event = parser_.process(ch);
+        WCHAR wc = ir[0].Event.KeyEvent.uChar.UnicodeChar;
+        if (wc != 0) {
+          event = process_windows_key_char(wc);
 
           // Handle fragmented VT sequences
           int safety_break = 0;
-          while (event.type == EventType::None && parser_.in_sequence() &&
+          while (event.type == EventType::None &&
+                 (parser_.in_sequence() || pending_high_surrogate_ != 0) &&
                  safety_break < 50) {
             DWORD n;
             GetNumberOfConsoleInputEvents(hIn, &n);
@@ -2560,12 +2891,12 @@ class Terminal {
               if (n == 0) break;
             }
 
-            if (PeekConsoleInput(hIn, ir, 1, &read) && read > 0 &&
+            if (PeekConsoleInputW(hIn, ir, 1, &read) && read > 0 &&
                 ir[0].EventType == KEY_EVENT && ir[0].Event.KeyEvent.bKeyDown) {
-              ReadConsoleInput(hIn, ir, 1, &read);
-              char next_ch = ir[0].Event.KeyEvent.uChar.AsciiChar;
-              if (next_ch != 0) {
-                event = parser_.process(next_ch);
+              ReadConsoleInputW(hIn, ir, 1, &read);
+              WCHAR next_wc = ir[0].Event.KeyEvent.uChar.UnicodeChar;
+              if (next_wc != 0) {
+                event = process_windows_key_char(next_wc);
               }
             } else {
               break;
@@ -2573,8 +2904,14 @@ class Terminal {
             safety_break++;
           }
 
-          if (event.type == EventType::None && parser_.in_sequence()) {
+          if (event.type == EventType::None && parser_.in_sequence() &&
+              !parser_.in_paste()) {
             event = parser_.flush();
+          }
+          if (event.type == EventType::None && parser_.in_paste() &&
+              std::chrono::steady_clock::now() >=
+                  last_paste_byte_time_ + std::chrono::milliseconds(1000)) {
+            event = parser_.finish_paste();
           }
 
           // Apply modifier flags from Windows control key state
@@ -2674,6 +3011,7 @@ class Terminal {
         event.y = ir[0].Event.WindowBufferSizeEvent.dwSize.Y;
       }
     }
+
 #else
     // Linux/Mac Implementation
     if (g_resize_pending) {
@@ -2697,18 +3035,37 @@ class Terminal {
         if (g_wakeup_pipe[0] >= nfds) nfds = g_wakeup_pipe[0] + 1;
       }
 
+      int eff_timeout = timeout_ms;
+      if (parser_.in_paste()) {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - last_paste_byte_time_).count();
+        int paste_remaining_ms = (int)(1000 - elapsed);
+        if (paste_remaining_ms < 0) paste_remaining_ms = 0;
+        if (eff_timeout < 0 || paste_remaining_ms < eff_timeout) {
+          eff_timeout = paste_remaining_ms;
+        }
+      }
+
       int ret;
-      if (timeout_ms >= 0) {
+      if (eff_timeout >= 0) {
         struct timeval tv;
-        tv.tv_sec = timeout_ms / 1000;
-        tv.tv_usec = (timeout_ms % 1000) * 1000;
+        tv.tv_sec = eff_timeout / 1000;
+        tv.tv_usec = (eff_timeout % 1000) * 1000;
         ret = select(nfds, &fds, NULL, NULL, &tv);
       } else {
         // Block indefinitely until input, wakeup, or signal
         ret = select(nfds, &fds, NULL, NULL, NULL);
       }
 
-      if (ret == 0) return event;
+      if (ret == 0) {
+        if (parser_.in_paste() &&
+            std::chrono::steady_clock::now() >=
+                last_paste_byte_time_ + std::chrono::milliseconds(1000)) {
+          return parser_.finish_paste();
+        }
+        return event;
+      }
       if (ret < 0) {
         if (errno == EINTR && g_resize_pending) {
           g_resize_pending = 0;
@@ -2717,6 +3074,11 @@ class Terminal {
           event.x = size.first;
           event.y = size.second;
           return event;
+        }
+        if (parser_.in_paste() &&
+            std::chrono::steady_clock::now() >=
+                last_paste_byte_time_ + std::chrono::milliseconds(1000)) {
+          return parser_.finish_paste();
         }
         return event;
       }
@@ -2745,6 +3107,9 @@ class Terminal {
       if (nread <= 0) break;  // End of input (for this poll)
 
       event = parser_.process(c);
+      if (parser_.in_paste()) {
+        last_paste_byte_time_ = std::chrono::steady_clock::now();
+      }
       if (event.type != EventType::None) return event;
 
       // Partial read; continue, but give a small grace period for the rest of
@@ -2761,8 +3126,14 @@ class Terminal {
       }
     }
 #endif
-    if (event.type == EventType::None && parser_.in_sequence()) {
+    if (event.type == EventType::None && parser_.in_sequence() &&
+        !parser_.in_paste()) {
       return parser_.flush();
+    }
+    if (event.type == EventType::None && parser_.in_paste() &&
+        std::chrono::steady_clock::now() >=
+            last_paste_byte_time_ + std::chrono::milliseconds(1000)) {
+      return parser_.finish_paste();
     }
     return event;
   }
@@ -2821,10 +3192,12 @@ class Terminal {
   UINT originalOutCP;
   UINT originalInCP;
   bool vt_supported_ = false;
+  wchar_t pending_high_surrogate_ = 0;
 #else
   struct termios originalTermios;
 #endif
   VTParser parser_;
+  std::chrono::steady_clock::time_point last_paste_byte_time_{};
 
   // Multi-click tracking
   std::chrono::steady_clock::time_point last_click_time_;
@@ -5035,7 +5408,11 @@ class Input : public Widget
         if (has_selection()) delete_selection();
 
         size_t byte_pos = char_to_byte_pos(cursor_char_pos_);
-        value_.insert(byte_pos, 1, (char)event.key);
+        if (!event.text.empty()) {
+          value_.insert(byte_pos, event.text);
+        } else {
+          value_.insert(byte_pos, 1, (char)event.key);
+        }
         cursor_char_pos_++;
         clear_selection();
         changed = true;
@@ -6147,6 +6524,8 @@ class TextArea : public Widget {
         save_undo_state();
         if (has_selection()) {
           delete_selection();
+        } else {
+          clear_selection();
         }
         std::string current_line = lines_[cursor_y_];
         size_t split_byte = char_to_byte_pos(cursor_y_, cursor_x_);
@@ -6161,20 +6540,23 @@ class TextArea : public Widget {
         if (has_selection()) {
           delete_selection();
           changed = true;
-        } else if (cursor_x_ > 0) {
-          std::string &l = lines_[cursor_y_];
-          size_t byte_idx = char_to_byte_pos(cursor_y_, cursor_x_ - 1);
-          size_t next_byte = char_to_byte_pos(cursor_y_, cursor_x_);
-          l.erase(byte_idx, next_byte - byte_idx);
-          cursor_x_--;
-          changed = true;
-        } else if (cursor_y_ > 0) {
-          cursor_x_ =
-              (int)prepare_text_for_render(lines_[cursor_y_ - 1]).size();
-          lines_[cursor_y_ - 1] += lines_[cursor_y_];
-          lines_.erase(lines_.begin() + cursor_y_);
-          cursor_y_--;
-          changed = true;
+        } else {
+          clear_selection();
+          if (cursor_x_ > 0) {
+            std::string &l = lines_[cursor_y_];
+            size_t byte_idx = char_to_byte_pos(cursor_y_, cursor_x_ - 1);
+            size_t next_byte = char_to_byte_pos(cursor_y_, cursor_x_);
+            l.erase(byte_idx, next_byte - byte_idx);
+            cursor_x_--;
+            changed = true;
+          } else if (cursor_y_ > 0) {
+            cursor_x_ =
+                (int)prepare_text_for_render(lines_[cursor_y_ - 1]).size();
+            lines_[cursor_y_ - 1] += lines_[cursor_y_];
+            lines_.erase(lines_.begin() + cursor_y_);
+            cursor_y_--;
+            changed = true;
+          }
         }
       } else if (event.is_delete()) {  // Delete
         save_undo_state();
@@ -6182,6 +6564,7 @@ class TextArea : public Widget {
           delete_selection();
           changed = true;
         } else {
+          clear_selection();
           auto &l = lines_[cursor_y_];
           auto chars = prepare_text_for_render(l);
           if (cursor_x_ < (int)chars.size()) {
@@ -6202,7 +6585,11 @@ class TextArea : public Widget {
         }
         std::string &l = lines_[cursor_y_];
         size_t byte_idx = char_to_byte_pos(cursor_y_, cursor_x_);
-        l.insert(byte_idx, 1, (char)event.key);
+        if (!event.text.empty()) {
+          l.insert(byte_idx, event.text);
+        } else {
+          l.insert(byte_idx, 1, (char)event.key);
+        }
         cursor_x_++;
         clear_selection();  // Prevent stale anchor from forming a selection
         changed = true;
@@ -6510,14 +6897,46 @@ class TextArea : public Widget {
   /// @brief Delete the selected text
   void delete_selection() {
     if (!has_selection()) return;
+    if (lines_.empty()) {
+      clear_selection();
+      return;
+    }
     int sx, sy, ex, ey;
     get_selection_range(sx, sy, ex, ey);
+
+    int last_line = (int)lines_.size() - 1;
+    int orig_sy = sy;
+    int orig_ey = ey;
+    sy = std::max(0, std::min(sy, last_line));
+    ey = std::max(0, std::min(ey, last_line));
+
+    if (orig_ey > last_line) {
+      ex = (int)prepare_text_for_render(lines_[ey]).size();
+    }
+    if (orig_sy != sy) {
+      int sy_len = (int)prepare_text_for_render(lines_[sy]).size();
+      if (orig_sy < 0) {
+        sx = 0;
+      } else {
+        sx = sy_len;
+      }
+    }
+    int sy_chars = (int)prepare_text_for_render(lines_[sy]).size();
+    sx = std::max(0, std::min(sx, sy_chars));
+    int ey_chars = (int)prepare_text_for_render(lines_[ey]).size();
+    ex = std::max(0, std::min(ex, ey_chars));
+
+    if (sy == ey && sx > ex) {
+      std::swap(sx, ex);
+    }
 
     if (sy == ey) {
       // Single line deletion
       size_t byte_start = char_to_byte_pos(sy, sx);
       size_t byte_end = char_to_byte_pos(sy, ex);
-      lines_[sy].erase(byte_start, byte_end - byte_start);
+      if (byte_end > byte_start) {
+        lines_[sy].erase(byte_start, byte_end - byte_start);
+      }
     } else {
       // Multi-line deletion
       size_t byte_start = char_to_byte_pos(sy, sx);
@@ -16523,6 +16942,9 @@ class App {
     term.drainInputBuffer();  // Clear stale events from initialization
     bool running = true;
     quit_app = [&]() { running = false; };
+    struct QuitGuard {
+      ~QuitGuard() { quit_app = nullptr; }
+    } quit_guard;
     bool needs_render = true;
 
     auto size = term.getSize();
@@ -16613,18 +17035,36 @@ class App {
       }
 
       // 1. Handle Additional Timers
-      for (auto &t : timers_) {
+      std::vector<int> timer_ids;
+      timer_ids.reserve(timers_.size());
+      for (const auto &t : timers_) {
+        timer_ids.push_back(t.id);
+      }
+
+      for (int tid : timer_ids) {
+        auto it = std::find_if(timers_.begin(), timers_.end(),
+                               [tid](const Timer &t) { return t.id == tid; });
+        if (it == timers_.end()) continue;
+
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            now - t.last_fire);
-        if (elapsed >= t.interval) {
-          if (t.callback) {
-            t.callback();
+            now - it->last_fire);
+        if (elapsed >= it->interval) {
+          auto cb = it->callback;
+          if (cb) {
+            cb();
             needs_render = true;
           }
-          t.last_fire = now;
-          elapsed = std::chrono::milliseconds(0);
+          it = std::find_if(timers_.begin(), timers_.end(),
+                            [tid](const Timer &t) { return t.id == tid; });
+          if (it != timers_.end()) {
+            it->last_fire = now;
+          }
         }
+      }
 
+      for (const auto &t : timers_) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - t.last_fire);
         int wait = (int)(t.interval - elapsed).count();
         if (wait < 0) wait = 0;
         if (min_wait_ms == -1 || wait < min_wait_ms) min_wait_ms = wait;
@@ -16647,7 +17087,7 @@ class App {
           // Need to wake up soon to finish resize
           int wait_r = (int)(resize_delay - elapsed_resize).count();
           if (wait_r < 0) wait_r = 0;
-          if (wait_r < min_wait_ms) min_wait_ms = wait_r;
+          if (min_wait_ms == -1 || wait_r < min_wait_ms) min_wait_ms = wait_r;
         }
       }
 
@@ -16684,6 +17124,8 @@ class App {
         needs_render = false;
       }
 
+      if (!running) break;
+
       // Wait for event with varying timeout, then batch process up to 50 events
       int max_batch = 50;
       int time_left = min_wait_ms;
@@ -16706,7 +17148,7 @@ class App {
 
         if (event.type == EventType::Resize) {
           // True Debounce: Always reset timer on new event
-          last_resize_req = now;
+          last_resize_req = std::chrono::steady_clock::now();
           pending_resize_w = event.x;
           pending_resize_h = event.y;
           update_screen_size(event.x, event.y);
@@ -16841,12 +17283,17 @@ class App {
         }
 
         // 1.7 Registered Key Events
-        if (event.is_key_event()) {
+        // (typed characters whose codepoint collides with a special key code
+        // in 1001-1068, e.g. Cyrillic U+0429-U+042C, must not match bindings)
+        if (event.is_key_event() &&
+            !(!event.text.empty() && event.key >= 1001 && event.key <= 1068)) {
           KeyBinding kv = {event.key, event.ctrl, event.alt, event.shift};
           auto it = key_events_.find(kv);
           if (it != key_events_.end()) {
-            it->second.callback();
-            if (it->second.consume) {
+            auto cb = it->second.callback;
+            bool consume = it->second.consume;
+            if (cb) cb();
+            if (consume) {
               needs_render = true;
               continue;  // Consumed, skip subsequent dispatch steps
             }
