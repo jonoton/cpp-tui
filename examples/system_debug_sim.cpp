@@ -323,6 +323,7 @@ int main() {
 
   log_layout->add(toolbar);
   auto sep_row = std::make_shared<Horizontal>();
+  sep_row->fixed_height = 1;
   sep_row->add(std::make_shared<Label>("---"));
   log_layout->add(sep_row);
 

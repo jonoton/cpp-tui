@@ -1,0 +1,25 @@
+<section class="hero-band" aria-labelledby="hero-title">
+  <div class="hero-inner">
+    <div class="hero-copy">
+      <p class="hero-eyebrow">{{ page.hero.eyebrow }}</p>
+      <h1 id="hero-title" class="hero-title">{{ page.hero.title }}</h1>
+      <p class="hero-lede">{{ page.hero.lede }}</p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="{{ '/getting-started' | relative_url }}">Get started <span aria-hidden="true">→</span></a>
+        <a class="btn btn-ghost" href="{{ '/api-reference' | relative_url }}">Browse the API</a>
+      </div>
+      <p class="hero-install"><span class="hero-install-prompt" aria-hidden="true">$</span> <code>#include "cpptui.hpp"</code></p>
+    </div>
+    <figure class="hero-terminal">
+      <div class="term-bar" aria-hidden="true"><span></span><span></span><span></span><em>./widget_demo</em></div>
+<a href="{{ '/assets/img/widget_demo.gif' | relative_url }}" title="Open full size"><picture>
+          <!-- Phones get a real 60-column capture so the text stays readable. -->
+          <source media="(max-width: 640px) and (prefers-reduced-motion: reduce)" srcset="{{ '/assets/img/widget_demo_mobile.png' | relative_url }}" width="1084" height="1496">
+          <source media="(max-width: 640px)" srcset="{{ '/assets/img/widget_demo_mobile.gif' | relative_url }}" width="572" height="748">
+          <source media="(prefers-reduced-motion: reduce)" srcset="{{ '/assets/img/widget_demo.png' | relative_url }}" width="2104" height="1736">
+          <img class="term-shot" src="{{ '/assets/img/widget_demo.gif' | relative_url }}" width="1112" height="868" alt="Recording of the widget_demo example: typing into text inputs, moving a slider, ticking checkboxes, then switching between the Nord, Tokyo Night and Catppuccin Mocha themes" loading="eager">
+        </picture></a>
+      <figcaption>Recorded from <code>examples/widget_demo.cpp</code></figcaption>
+    </figure>
+  </div>
+</section>

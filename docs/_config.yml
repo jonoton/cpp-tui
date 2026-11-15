@@ -1,17 +1,24 @@
 title: cpp-tui
 description: A lightweight, single-header C++ library for creating Text User Interfaces (TUIs).
-remote_theme: pages-themes/cayman@v0.2.0
+baseurl: /cpp-tui
+url: https://jonoton.github.io
+markdown: kramdown
+highlighter: rouge
 plugins:
-  - jekyll-remote-theme
+  - jekyll-seo-tag
 
 nav_pages:
   - title: Home
     url: /
   - title: Getting Started
+    short: Start
     url: /getting-started
   - title: Core Concepts
+    short: Concepts
     url: /core-concepts
   - title: API Reference
+    short: API
     url: /api-reference
   - title: Troubleshooting
+    short: Help
     url: /troubleshooting

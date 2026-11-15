@@ -7,7 +7,7 @@ nav_order: 4
 ## API Reference
 
 <details class="api-toc" open>
-<summary>📑 Table of Contents</summary>
+<summary>Contents — jump to a widget</summary>
 <ul>
 <li><a href="#app">App</a></li>
 <li><a href="#base-widget-properties">Base Widget Properties</a></li>
@@ -202,7 +202,7 @@ All widgets inherit from the base `Widget` class and share these common properti
 | `fg_color` | `Color` | Foreground color override |
 | `bg_color` | `Color` | Background color override |
 | `focusable` | `bool` | Whether the widget can receive keyboard/mouse focus |
-| `tab_stop` | `bool` | Whether the widget is included in `Tab` navigation |
+| `tab_stop` | `bool` | Whether the widget is included in <kbd>Tab</kbd> navigation |
 | `set_responsive` | method | Toggle visibility based on SM/MD/LG screen sizes |
 | `set_responsive_width` | method | Toggle visibility based on screen width |
 | `set_responsive_height` | method | Toggle visibility based on screen height |
@@ -257,6 +257,14 @@ Invisible widgets used to add spacing between other widgets.
 
 Aligns a single child within its available space.
 
+```cpp
+auto ok = std::make_shared<Button>("OK");
+ok->fixed_width = 8;
+
+auto centered = std::make_shared<Align>(Align::H::Center, Align::V::Bottom);
+centered->add(ok);   // the button sits at the bottom centre of the space
+```
+
 | Enum | Values |
 |------|--------|
 | `Align::H` | `Left`, `Center`, `Right` |
@@ -292,7 +300,7 @@ split->vertical = false; // horizontal split
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `ratio` | `float` | Divider position (0–1) |
+| `ratio` | `double` | Divider position (0–1, default 0.5) |
 | `vertical` | `bool` | `true` = vertical split, `false` = horizontal |
 
 <p class="back-to-top"><a href="#api-reference">↑ Back to top</a></p>
@@ -366,7 +374,7 @@ border->add(content);
 
 | Property | Values |
 |----------|--------|
-| `BorderStyle` | `Single`, `Double`, `Rounded` |
+| `BorderStyle` | `ASCII` (default), `Single`, `Double`, `Rounded` |
 
 <p class="back-to-top"><a href="#api-reference">↑ Back to top</a></p>
 
@@ -427,11 +435,16 @@ acc->allow_multiple = false; // only one section open at a time
 A general-purpose popup dialog with border and shadow.
 
 ```cpp
-auto dialog = std::make_shared<Dialog>(content);
+auto dialog = std::make_shared<Dialog>(&app, BorderStyle::Rounded);
+dialog->set_title(" Info ");
+dialog->width = 30;
+dialog->height = 8;
 dialog->modal = true;
-dialog->shadow = true;
-app.open_dialog(dialog);       // auto-centered
-app.open_dialog(dialog, 5, 3); // at specific coordinates
+dialog->add(content);           // any widget, e.g. a Vertical
+
+dialog->open();                 // auto-centered
+dialog->open(5, 3);             // or at specific coordinates
+dialog->close();
 ```
 
 | Property | Type | Description |
@@ -460,8 +473,8 @@ Displays read-only text with color support.
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `text` | `string` | The text content (see `set_text` / `get_text`) |
-| `selectable` | `bool` | If `true`, text can be selected and copied with `Ctrl+C` |
+| `set_text(text)` / `get_text()` | method | Change or read the text content |
+| `selectable` | `bool` | If `true`, text can be selected and copied with <kbd>Ctrl</kbd>+<kbd>C</kbd> |
 | `underline` | `bool` | If `true`, text will be rendered with an underline |
 
 ---
@@ -510,9 +523,10 @@ auto para = std::make_shared<Paragraph>(styled);
 | `bold(text)` | Append bold text |
 | `italic(text)` | Append italic text |
 | `underline(text)` | Append underlined text |
+| `bold_italic(text)` | Append bold + italic text |
 | `colored(text, color)` | Append colored text |
 | `colored_bold(text, color)` | Append bold + colored text |
-| `add(text, ...)` | Base method for custom spans |
+| `add(text)` | Append plain text |
 
 <p class="back-to-top"><a href="#api-reference">↑ Back to top</a></p>
 
@@ -599,7 +613,7 @@ Displays a dynamic line graph of a data series. Supports multi-line heights, aut
 | Property | Type | Description |
 |----------|------|-------------|
 | `data` | `vector<float>` | List of values |
-| `height` | `int` | Height of the sparkline plot in cells |
+| `fixed_height` | `int` | Height of the sparkline plot in cells (inherited from `Widget`) |
 | `auto_scale` | `bool` | Auto-scale value limits (default `false`) |
 | `min_val` / `max_val` | `float` | Fixed range limits when `auto_scale = false` |
 | `color` | `Color` | Fallback color of the sparkline |
@@ -615,7 +629,7 @@ Animated activity indicator with multiple styles.
 
 ```cpp
 auto spinner = std::make_shared<Spinner>(&app);
-spinner->set_style(Spinner::StyleBrailleSpin());
+spinner->style = Spinner::StyleBrailleSpin();
 spinner->value = -1; // indeterminate (spinning)
 spinner->color = Color::Cyan();
 ```
@@ -631,7 +645,8 @@ spinner->color = Color::Cyan();
 | `value` | `float` | `>= 0` for determinate, `< 0` for spinning |
 | `color` | `Color` | Spinner character color |
 
-> **Note:** Requires an `App*` pointer for timer-based animation.
+> Requires an `App*` pointer for timer-based animation.
+{: .callout .callout-note}
 
 <p class="back-to-top"><a href="#api-reference">↑ Back to top</a></p>
 
@@ -654,7 +669,7 @@ Hover-triggered popup with text selection support.
 **Interactions:**
 - Tooltip stays visible when mouse moves into it
 - Click-drag to select text, double-click for a word, triple-click for all
-- `Ctrl+C` to copy selected text
+- <kbd>Ctrl</kbd>+<kbd>C</kbd> to copy selected text
 
 <p class="back-to-top"><a href="#api-reference">↑ Back to top</a></p>
 
@@ -665,9 +680,14 @@ Hover-triggered popup with text selection support.
 Toast-style auto-dismissing messages with text selection support.
 
 ```cpp
-auto notif = std::make_shared<Notification>(&app);
-notif->position = Notification::TopRight;
-notif->show("File saved!", Notification::Success, 3000);
+auto notif = std::make_shared<Notification>();
+notif->position = Notification::Position::TopRight;
+
+auto layers = std::make_shared<Stack>();  // draw the toast over the main UI
+layers->add(main_ui);
+layers->add(notif);
+
+notif->show("File saved!", Notification::Type::Success, 3000);
 ```
 
 | Property | Type | Description |
@@ -679,7 +699,7 @@ notif->show("File saved!", Notification::Success, 3000);
 **Interactions:**
 - Notifications pause auto-dismiss when hovered
 - Click-drag to select text, double-click for a word, triple-click for all
-- `Ctrl+C` to copy selected text
+- <kbd>Ctrl</kbd>+<kbd>C</kbd> to copy selected text
 
 <p class="back-to-top"><a href="#api-reference">↑ Back to top</a></p>
 
@@ -722,8 +742,8 @@ input->on_change = [](std::string val) { /* value changed */ };
 
 | Method | Description |
 |--------|-------------|
-| `get_text()` | Returns current text |
-| `set_text(string)` | Sets the text |
+| `get_value()` | Returns current text |
+| `set_value(string)` / `set_text(string)` | Sets the text |
 
 **Features:** Auto-scrolls horizontally · Copy/Cut/Paste · Undo/Redo
 
@@ -781,7 +801,7 @@ Input field with autocomplete dropdown.
 | `on_search` | callback | Fired on search submit (`void(string)`) |
 | `on_change` | callback | Fired on text change (`void(string)`) |
 
-**Keyboard:** Arrow keys to navigate suggestions · Enter to confirm · `Ctrl+Space` to open the suggestions list manually
+**Keyboard:** Arrow keys to navigate suggestions · Enter to confirm · <kbd>Ctrl</kbd>+<kbd>Space</kbd> to open the suggestions list manually
 
 <p class="back-to-top"><a href="#api-reference">↑ Back to top</a></p>
 
@@ -795,7 +815,7 @@ A modern alternative to checkboxes.
 |----------|------|-------------|
 | `active_color` | `Color` | Color when on |
 | `inactive_color` | `Color` | Color when off |
-| `on_label` / `off_label` | `string` | Custom text (default `"[ON]"` / `"[OFF]"`) |
+| `on_label` / `off_label` | `string` | Custom text (default `"[ ON  ]"` / `"[ OFF ]"`) |
 
 ---
 
@@ -860,7 +880,7 @@ Mutually exclusive selection from a list of strings.
 
 | Method | Description |
 |--------|-------------|
-| `get_selected_index()` | Returns selected index |
+| `selected_index` | Currently selected index (member, default `0`) |
 | `set_style(selected, unselected)` | Custom prefix markers |
 
 ---
@@ -877,7 +897,7 @@ Multiple selection from a list.
 
 | Method | Description |
 |--------|-------------|
-| `get_checked_indices()` | Returns vector of checked indices |
+| `checked_states` | `vector<bool>` of checked flags, parallel to `options` |
 
 ---
 
@@ -967,7 +987,7 @@ table->auto_page_size = true; // fit rows to height
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `columns` | `vector<string>` | Column headers |
+| `columns` | `vector<StyledText>` | Column headers |
 | `rows` | `vector<vector<StyledText>>` | Row data (supports formatting per cell) |
 | `page_size` | `int` | Number of rows per page |
 | `auto_page_size` | `bool` | Auto-fit rows to container height |
@@ -977,7 +997,6 @@ table->auto_page_size = true; // fit rows to height
 | `alternate_colors` | `bool` | Toggle zebra-striping |
 | `row_color_a` / `row_color_b` | `Color` | Custom zebra-stripe colors |
 | `border_color` | `Color` | Table inner border color |
-| `selection_indicator` | `string` | Custom selection prefix (default `"> "`) |
 
 | Method | Description |
 |--------|-------------|
@@ -994,7 +1013,7 @@ Efficient scrollable list for large datasets (e.g., process lists). Supports row
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `columns` | `vector<string>` | Column headers |
+| `columns` | `vector<StyledText>` | Column headers |
 | `rows` | `vector<vector<StyledText>>` | Row data (supports formatting per cell) |
 | `col_widths` | `vector<int>` | Optional explicit column widths |
 | `selected_index` | `int` | Currently selected row |
@@ -1025,14 +1044,15 @@ Hierarchical data display with keyboard navigation and selection.
 TreeNode root;
 root.label = "Documents";
 root.icon = "📁";
-root.children = {
-    {"README.md", false, {}, false, "📄", {}},
-    {"src", true, { /* nested children */ }, false, "📁", {}}
-};
+root.expanded = true;
+root.add("README.md").icon = "📄";
+TreeNode& src = root.add("src");
+src.add("main.cpp");
 
 auto tree = std::make_shared<TreeView>();
 tree->root_nodes = {root};
-tree->on_submit = [](const TreeNode& node) { /* double-click or Enter */ };
+tree->refresh();               // rebuild rows after changing root_nodes
+tree->on_submit = [](TreeNode* node) { /* double-click or Enter */ };
 ```
 
 | Property | Type | Description |
@@ -1081,7 +1101,7 @@ list->selectable = true;
 | `bullet_markers` | `vector<string>` | Custom markers per level (e.g. `{"- ", "o ", "> "}`) |
 | `selectable` | `bool` | Enable text selection |
 
-**Features:** Click-drag to select text · Double-click for word · Triple-click for all · `Ctrl+C` to copy · Automatic word wrapping
+**Features:** Click-drag to select text · Double-click for word · Triple-click for all · <kbd>Ctrl</kbd>+<kbd>C</kbd> to copy · Automatic word wrapping
 
 <p class="back-to-top"><a href="#api-reference">↑ Back to top</a></p>
 
@@ -1098,7 +1118,8 @@ Plots numerical (x, y) data with interactive data-point tooltips.
 
 ```cpp
 auto chart = std::make_shared<LineChart>();
-chart->add_series(data, "Temperature", Color::Red(), LineStyle::Braille);
+std::vector<double> data = {20.5, 21.0, 23.4, 22.8};
+chart->add_series(data, "Temperature", Color::Red(), LineChart::LineStyle::Braille);
 chart->show_legend = true;
 chart->show_tooltip = true;
 ```
@@ -1109,14 +1130,15 @@ chart->show_tooltip = true;
 | `show_legend` | `bool` | Show interactive series legend (supports click-to-toggle and hover-highlight) |
 | `show_grid_lines` | `bool` | Show background grid lines aligned with ticks |
 | `auto_scale` | `bool` | Automatically scale axis range with a 5% margin buffer |
-| `min_val` / `max_val` | `float` | Axis range (for LineChart y-axis) |
+| `min_val` / `max_val` | `double` | LineChart y-axis range when `auto_scale = false` (default 0–1) |
+| `x_min` / `x_max` / `y_min` / `y_max` | `double` | ScatterChart axis ranges when `auto_scale = false` (default 0–1) |
 | `x_tick_count` / `y_tick_count` | `int` | Number of tick marks |
 | `x_tick_precision` / `y_tick_precision` | `int` | Decimal places for labels |
 | `label_all_x_ticks` / `label_all_y_ticks` | `bool` | Force label on every tick |
-| `x_tick_formatter` / `y_tick_formatter` | `function` | Custom label formatters |
+| `x_tick_formatter` / `y_tick_formatter` | `function` | Custom label formatters: `string(double value)` |
 | `show_tooltip` | `bool` | Interactive tooltips on hover |
 | `tooltip_duration_ms` | `int` | Linger duration (default 1000ms) |
-| `tooltip_formatter` | `function` | Custom tooltip text |
+| `tooltip_formatter` | `function` | Custom tooltip text: `string(const Series& s, int index, double value)` on LineChart, `string(const Series& s, int index, double x, double y)` on ScatterChart |
 
 | Series Property | Type | Description |
 |-----------------|------|-------------|
@@ -1130,6 +1152,25 @@ chart->show_tooltip = true;
 | `fill_char` | `string` | Filling character block (default `"░"`) |
 | `fill_color` | `Color` | Custom background fill color |
 | `visible` | `bool` | Series visibility control (default `true`) |
+
+`ScatterChart` series hold (x, y) points instead:
+
+```cpp
+auto scatter = std::make_shared<ScatterChart>();
+scatter->x_min = -2.0; scatter->x_max = 2.0;
+scatter->y_min = -2.0; scatter->y_max = 2.0;
+std::vector<std::pair<double, double>> pts = { {-1.0, 0.5}, {0.2, -0.8}, {1.4, 1.1} };
+scatter->add_series(pts, "Samples", Color::Cyan(), "*", /*use_braille=*/false);
+```
+
+| ScatterChart Series Property | Type | Description |
+|------------------------------|------|-------------|
+| `points` | `vector<pair<double, double>>` | (x, y) points |
+| `label` | `string` | Legend label |
+| `color` | `Color` | Series color |
+| `marker` | `string` | Marker drawn at each point (default `"*"`) |
+| `use_braille` | `bool` | Plot points as Braille dots for higher density |
+| `visible` | `bool` | Show or hide the series (also toggled from the legend) |
 
 **Styles:** `LineStyle::Points`, `LineStyle::Lines`, `LineStyle::Braille`
 
@@ -1148,7 +1189,7 @@ Vertical bar chart for categorical data.
 | `show_x_axis` / `show_y_axis` | `bool` | Axis visibility |
 | `show_x_ticks` / `show_y_ticks` | `bool` | Tick visibility |
 | `show_tooltip` | `bool` | Interactive tooltips on hover |
-| `tooltip_formatter` | `function` | Custom tooltip text (`void(int, double)`) |
+| `tooltip_formatter` | `function` | Custom tooltip text: `string(const string& series, const string& category, double value)` |
 
 Tick customization options are the same as LineChart.
 
@@ -1162,7 +1203,7 @@ Semi-circular progress meter.
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `value` | `float` | 0.0 to 1.0 |
+| `value` | `double` | 0.0 to 1.0 |
 | `min_label` / `max_label` | `string` | Endpoint labels |
 | `show_value` | `bool` | Show center value |
 | `value_format` | `string` | Value display format (e.g. `"%d%%"`) |
@@ -1243,8 +1284,8 @@ box->set_data(10.0, 35.0, 52.0, 70.0, 95.0);
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `data` | `vector<vector<float>>` | 2D values (0–1) |
-| `row_labels` / `col_labels` | `vector<string>` | Axis labels |
+| `data` | `vector<vector<double>>` | 2D values (0–1) |
+| `row_labels` / `col_labels` | `vector<StyledText>` | Axis labels |
 | `low_color` / `high_color` | `Color` | Gradient endpoints |
 
 <p class="back-to-top"><a href="#api-reference">↑ Back to top</a></p>
@@ -1261,13 +1302,10 @@ box->set_data(10.0, 35.0, 52.0, 70.0, 95.0);
 Popup menu widget with keyboard and mouse support.
 
 ```cpp
-auto menu = std::make_shared<MenuDialog>();
-menu->items = {
-    {"Open", []() { /* ... */ }},
-    {"Save", []() { /* ... */ }, {
-        {"Save As...", []() { /* ... */ }}  // sub-item
-    }}
-};
+auto menu = std::make_shared<MenuDialog>(&app);
+menu->items.push_back({"Open", []() { /* ... */ }});
+menu->items.push_back({"Save", []() { /* ... */ },
+                       {MenuItem("Save As...", []() { /* ... */ })}});  // sub-items
 menu->show(10, 5);
 ```
 
@@ -1276,7 +1314,8 @@ menu->show(10, 5);
 | `items` | `vector<MenuItem>` | Menu items with `{label, action, sub_items}` |
 | `mouse_hover_select` | `bool` | Highlight items on hover |
 
-> **Note:** Clicking outside closes the menu and propagates the event (enabling fast menu switching).
+> Clicking outside closes the menu and propagates the event (enabling fast menu switching).
+{: .callout .callout-note}
 
 <p class="back-to-top"><a href="#api-reference">↑ Back to top</a></p>
 
@@ -1417,7 +1456,7 @@ Built-in support for Unicode and wide characters (CJK, emoji, etc.). Most functi
 
 ```cpp
 std::string text = "Hello中文🎉";
-int width = cpptui::utf8_display_width(text); // Returns 12 (5 + 4 + 2)
+int width = cpptui::utf8_display_width(text); // Returns 11 (5 + 4 + 2)
 ```
 
 <p class="back-to-top"><a href="#api-reference">↑ Back to top</a></p>

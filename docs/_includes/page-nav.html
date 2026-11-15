@@ -20,19 +20,19 @@
   <div class="page-nav-inner">
     {% if prev_page %}
     <a href="{{ prev_page.url | relative_url }}" class="page-nav-link page-nav-prev">
-      <span class="page-nav-direction">← Previous</span>
+      <span class="page-nav-direction"><span aria-hidden="true">←</span> Previous</span>
       <span class="page-nav-title">{{ prev_page.title }}</span>
     </a>
     {% else %}
-    <span></span>
+    <span class="page-nav-spacer" aria-hidden="true"></span>
     {% endif %}
     {% if next_page %}
     <a href="{{ next_page.url | relative_url }}" class="page-nav-link page-nav-next">
-      <span class="page-nav-direction">Next →</span>
+      <span class="page-nav-direction">Next <span aria-hidden="true">→</span></span>
       <span class="page-nav-title">{{ next_page.title }}</span>
     </a>
     {% else %}
-    <span></span>
+    <span class="page-nav-spacer" aria-hidden="true"></span>
     {% endif %}
   </div>
 </nav>

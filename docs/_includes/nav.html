@@ -1,18 +1,20 @@
 <nav class="site-nav" role="navigation" aria-label="Documentation navigation">
-  <ul class="nav-list">
-    {% for nav in site.nav_pages %}
-      {% assign nav_url = nav.url | relative_url %}
-      {% assign current = page.url | replace: 'index.html', '' | replace: '.html', '' %}
-      {% assign target = nav.url | replace: 'index.html', '' %}
-      {% if current == target or current == nav.url %}
-        <li class="nav-item active">
-          <a href="{{ nav_url }}" aria-current="page">{{ nav.title }}</a>
-        </li>
-      {% else %}
-        <li class="nav-item">
-          <a href="{{ nav_url }}">{{ nav.title }}</a>
-        </li>
-      {% endif %}
-    {% endfor %}
-  </ul>
+  <div class="nav-inner">
+    <ul class="nav-list">
+      {% for nav in site.nav_pages %}
+        {% assign nav_url = nav.url | relative_url %}
+        {% assign current = page.url | replace: 'index.html', '' | replace: '.html', '' | append: '/' | replace: '//', '/' %}
+        {% assign target = nav.url | replace: 'index.html', '' | replace: '.html', '' | append: '/' | replace: '//', '/' %}
+        {% if current == target %}
+          <li class="nav-item active">
+            <a href="{{ nav_url }}" aria-label="{{ nav.title }}" aria-current="page"><span class="nav-label-full">{{ nav.title }}</span><span class="nav-label-short">{{ nav.short | default: nav.title }}</span></a>
+          </li>
+        {% else %}
+          <li class="nav-item">
+            <a href="{{ nav_url }}" aria-label="{{ nav.title }}"><span class="nav-label-full">{{ nav.title }}</span><span class="nav-label-short">{{ nav.short | default: nav.title }}</span></a>
+          </li>
+        {% endif %}
+      {% endfor %}
+    </ul>
+  </div>
 </nav>

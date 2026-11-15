@@ -6,6 +6,8 @@ nav_order: 3
 
 ## Core Concepts
 
+How a cpp-tui program is put together: the `App` event loop, threading, the widget model, the two-phase layout engine, theming, events, and clipboard support.
+
 ### App
 
 The `App` class is the entry point of your application. It initializes the terminal, handles input events, and manages the main event loop.
@@ -42,6 +44,8 @@ int main() {
 Background threads can update the UI without polling. Use `post()` to schedule widget modifications on the main thread:
 
 ```cpp
+#include <thread>
+
 App app;
 auto label = std::make_shared<Label>("Waiting...");
 
@@ -56,12 +60,20 @@ worker.detach();
 app.run(root);
 ```
 
-For advanced use where you manage your own synchronization, `update()` provides a lighter alternative:
+`update()` is a lighter alternative when the shared state is already thread-safe. It only wakes the event loop so it redraws; it does not make widget changes safe. For example, a widget that reads an atomic counter while rendering:
 
 ```cpp
-label->set_text("Updated");  // Caller is responsible for thread safety
-app.update();                 // Immediately wakes the event loop to redraw
+#include <atomic>
+
+std::atomic<int> downloaded{0};  // read by a widget during render
+
+// On the worker thread:
+downloaded = 42;
+app.update();  // wake the event loop so it redraws now
 ```
+
+To change widgets themselves from another thread, always use `post()`.
+{: .callout .callout-warning}
 
 ### Widget
 
@@ -101,28 +113,49 @@ Widgets in `cpp-tui` participate in a two-phase layout negotiation:
 The `Theme` class manages the color palette of the application.
 
 - **Set Theme**: `Theme::set_theme(Theme::Dark())` or any built-in theme.
-- **Built-in Themes**:
-  - `Theme::Dark()` - Catppuccin Mocha (soothing pastel dark theme)
-  - `Theme::Light()` - Catppuccin Latte (soothing pastel light theme)
-  - `Theme::Nord()` - Arctic, north-bluish color palette
-  - `Theme::TokyoNight()` - Modern dark theme inspired by Tokyo's nightscape
-  - `Theme::SolarizedLight()` - Classic scientific color palette by Ethan Schoonover
 - **Custom Theme**: You can create a `Theme` struct and assign custom `Color` values (including `scrollbar_track`, `input_placeholder`, etc).
+
+| Built-in theme | Palette |
+|----------------|---------|
+| `Theme::Dark()` | Catppuccin Mocha — soothing pastel dark (default) |
+| `Theme::Light()` | Catppuccin Latte — soothing pastel light |
+| `Theme::Nord()` | Arctic, north-bluish palette |
+| `Theme::TokyoNight()` | Modern dark theme inspired by Tokyo's nightscape |
+| `Theme::SolarizedLight()` | Classic scientific palette by Ethan Schoonover |
 
 ### Events
 
 Events are handled by the `App` and propagated to widgets.
-- **Key Events**: Pressing keys like `Enter`, `Esc`, `Tab`, or arrow keys. Global shortcuts can be registered with `register_key()` — these take priority over widget-level key handling.
+- **Key Events**: Pressing keys like <kbd>Enter</kbd>, <kbd>Esc</kbd>, <kbd>Tab</kbd>, or arrow keys. Global shortcuts can be registered with `register_key()` — these take priority over widget-level key handling.
 - **Mouse Events**: Clicks, drags, and scrolling.
-- **Focus**: `Tab` / `Shift+Tab` cycles focus between interactive widgets.
-- **Resize**: `g_resize_pending` signal handling for terminal resize events.
+- **Focus**: <kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd> cycles focus between interactive widgets.
+- **Resize**: when the terminal is resized, the `App` re-runs layout and redraws automatically.
+
+#### Default controls
+
+| Input | Action |
+|-------|--------|
+| <kbd>Ctrl</kbd>+<kbd>C</kbd> | Force quit (copy when a text widget has a selection). Use `App::quit()` for a graceful exit. |
+| <kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd> | Move focus forward / backward |
+| Arrow keys | Move between items and rows, adjust sliders |
+| <kbd>Enter</kbd> / <kbd>Space</kbd> | Activate buttons, toggle checkboxes, submit |
+| <kbd>PageUp</kbd> / <kbd>PageDown</kbd> | Scroll a page in scrollable containers and tables |
+| Mouse wheel | Vertical scroll |
+| <kbd>Ctrl</kbd> + mouse wheel | Horizontal scroll (scrollable containers, `TextArea`) |
+| Click | Focus a widget, press a button, place the cursor |
+| Drag | Select text, drag a slider thumb, resize a `SplitPane` |
 
 ### Clipboard & History
 
 Global default keybindings are available for text editing widgets (`Input`, `TextArea`, and selectable `Label`).
-- **Copy**: `Ctrl+C` or `Ctrl+Shift+C`
-- **Cut**: `Ctrl+X` or `Ctrl+Shift+X` (Editable widgets only)
-- **Paste**: `Ctrl+V` or `Ctrl+Shift+V` (Editable widgets only)
-- **Undo**: `Ctrl+Z` (Editable widgets only)
-- **Redo**: `Ctrl+Shift+Z` or `Ctrl+Y` (Editable widgets only)
-- **Select All**: `Ctrl+A` or **Triple-click**
+
+| Action | Keys |
+|--------|------|
+| Copy | <kbd>Ctrl</kbd>+<kbd>C</kbd> or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> |
+| Cut ¹ | <kbd>Ctrl</kbd>+<kbd>X</kbd> or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd> |
+| Paste ¹ | <kbd>Ctrl</kbd>+<kbd>V</kbd> or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> |
+| Undo ¹ | <kbd>Ctrl</kbd>+<kbd>Z</kbd> |
+| Redo ¹ | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> or <kbd>Ctrl</kbd>+<kbd>Y</kbd> |
+| Select all | <kbd>Ctrl</kbd>+<kbd>A</kbd> or triple-click |
+
+¹ Editable widgets only.
